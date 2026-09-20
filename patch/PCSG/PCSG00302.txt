@@ -23,3 +23,27 @@
 0:0x8F90EA t2_mov(1, 5, fb_h)
 @FPS
 >sceDisplaySetFrameBuf_withWait()
+
+# v1.84 (source: VitaGrafixPatchlist PR #149 by devingDev, 2024-08-28)
+[PCSG00302, eboot.bin, 0x50974E2C]
+@FB
+0:0x8E013E t2_mov(1, 1, fb_w) . t2_mov(1, 0, fb_h)
+0:0x8E014E t2_mov(1, 1, 1024)
+0:0x8E01B0 t2_mov(1, 1, fb_w) . t2_mov(1, 2, fb_h) . t2_mov(1, 3, 1024)
+0:0x8E06DC t2_mov(1, 1, fb_w) . t2_mov(1, 2, fb_h) . t2_mov(1, 3, 1024)
+0:0x8F797E t2_mov(1, 1, 0x220000)
+0:0x8F79FA t2_mov(1, 7, fb_w)
+0:0x8F7A1E t2_mov(1, 8, fb_h)
+0:0x8F7A26 t2_mov(1, 1, 1024)
+0:0x8F7A5E t2_mov(1, 3, 1024)
+0:0x8F7AA4 t2_mov(1, 1, 0x440000)
+0:0x8F7AC4 t2_mov(1, 6, fb_h) . t2_mov(1, 1, 1024)
+0:0x8F7AEC t2_mov(1, 0, 1024 * 2 * 4)
+0:0x8F7AFE t2_mov(1, 3, fb_w)
+0:0x8F7B26 t2_mov(1, 5, 0x88000)
+0:0x8F7B2C nop *2
+0:0x8F7B30 t2_mov(0, 8, 1024)
+0:0x8F7C42 t2_mov(1, 2, 1024)
+0:0x8F7C4A t2_mov(1, 5, fb_h)
+@FPS
+>sceDisplaySetFrameBuf_withWait()

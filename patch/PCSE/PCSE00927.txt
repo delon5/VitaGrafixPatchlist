@@ -1,0 +1,12 @@
+# Akiba's Beat [US]
+# Source: VitaGrafixPatchlist issue #131
+
+# unknown version (no module NID in the issue)
+[PCSE00927, eboot.bin]
+@FPS
+>sceDisplaySetFrameBuf_withWait()
+@FB
+0:0x5307E4 t2_mov(1, 0, fb_w)
+0:0x5307EC t2_mov(1, 1, fb_h)
+0:0x536058 t2_mov(1, 11, fb_w)
+0:0x53605C t2_mov(1, 10, fb_h)

@@ -1,0 +1,10 @@
+# Catherine: Full Body (demo) [JP]
+# Source: VitaGrafixPatchlist issue #30
+
+# unknown version (no module NID in the issue)
+[PCSG90323, eboot.bin]
+@IB
+0:0xBBCA8 t2_mov(1, 5, ib_w)
+0:0xBBCB0 t2_mov(1, 6, ib_h)
+0:0x13452F2 t2_mov(1, 14, ib_w)
+0:0x13452F6 t2_mov(1, 12, ib_h)

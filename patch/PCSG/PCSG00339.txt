@@ -1,0 +1,29 @@
+# Girls und Panzer: Senshadou, Kiwamemasu! [JP]
+# Source: VitaGrafixPatchlist issue #45 (Electry, 2020-02-08)
+
+# v1.00
+[PCSG00339, eboot.bin, 0x243ECAAC]
+@FPS
+0:0xC017E mov32  (0, (10.9 * (4 - vblank)), 0)
+0:0xC01CA t1_movt(0, (100.0 / (4 - vblank)) >> 16)
+0:0xC0114 nop *2
+0:0x136B2E t1_mov(0, vblank) . BFF01AEA r . nop # sceDisplayWaitSetFrameBufMulti
+@FB
+# Framebuffer
+0:0xC0334 t2_mov(1, 0, fb_w)
+0:0xC033C t2_mov(1, 0, fb_h)
+# Common dialog
+0:0x1334DC t2_mov(1, 0, fb_w)
+0:0x1334E2 t2_mov(1, 1, fb_h)
+# Primary RT
+0:0x13349C t2_mov(1, 0, fb_w)
+0:0x1334A4 t2_mov(1, 0, fb_h)
+# Menu viewport
+0:0xC500C t1_movt(0, float(fb_w) >> 16)
+0:0xC5016 t1_movt(0, float(fb_h) >> 16)
+# In game viewport
+0:0xC0FA t1_movt(1, float(fb_w) >> 16)
+0:0xC104 t1_movt(1, float(fb_h) >> 16)
+# Postprocess
+0:0x7C0EA t1_movt(0, float(fb_w) >> 16)
+0:0x7C102 t1_movt(0, float(fb_h) >> 16)

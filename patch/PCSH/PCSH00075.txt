@@ -12,3 +12,7 @@
 @MSAA
 0:0x1399E2 t1_mov(1, msaa * 2)
 0:0x139A3A t1_mov(1, msaa * 2)
+# @FPS from VitaGrafixPatchlist issue #159
+@FPS
+0:0xB446 002000BF r
+0:0xBB28 t1_mov(0, vblank)

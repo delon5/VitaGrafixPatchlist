@@ -1,0 +1,7 @@
+# Samurai Warriors 4 [US]
+# Source: VitaGrafixPatchlist issue #133
+
+# unknown version (no module NID in the issue)
+[PCSE00503, eboot.bin]
+@FPS
+0:0x2E1152 t1_mov(0, vblank)

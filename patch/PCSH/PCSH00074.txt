@@ -9,3 +9,11 @@
 0:0xF9970 t2_mov(1, 2, ib_h)
 0:0xF99A2 t3_mov(2, ib_w * 736 / 720)
 0:0xF99A6 t2_mov(1, 3, ib_h)
+
+# @FPS from VitaGrafixPatchlist issue #159. The issue gives module NID 0xF1242A81 for
+# this title, which is the Trails of Cold Steel II NID; the existing v1.03 section above
+# uses 0xAEF049DB. Kept as a separate section so it only applies when that NID matches.
+[PCSH00074, eboot.bin, 0xF1242A81]
+@FPS
+0:0xA644 85F85D00 r
+0:0xADB6 t1_mov(0, vblank)

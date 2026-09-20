@@ -1,0 +1,8 @@
+# Sword Art Online: Hollow Fragment [US]
+# Source: VitaGrafixPatchlist issue #150
+
+# v1.02
+[PCSE00465, eboot.bin, 0x6595A5D6]
+# Sword Art Online Hollow Fragment [EU 1.02]
+@FPS
+0:0x03BBE2 t1_mov(0, vblank)

@@ -1,0 +1,8 @@
+# Sword Art Online: Hollow Realization [ASIA]
+# Source: VitaGrafixPatchlist issue #59 (Electry, 2020-02-16)
+
+# v3.20
+[PCSH00266, eboot.bin, 0x29655783]
+@IB
+0:0x1A78 t2_mov(0, 4, ib_w)
+0:0x1A80 t2_mov(0, 1, ib_h)

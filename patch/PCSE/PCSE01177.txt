@@ -1,0 +1,75 @@
+# Iconoclasts [US]
+#
+# The game (Chowdren engine) keeps a 1280x720 logical window and maps it to
+# the display by halving every coordinate, into a 640x368 framebuffer
+# (pitch 1024) that the Vita then scales. @FB moves the display buffers,
+# colour surface, render target, surface clip and the window-to-device
+# mapping (region clip + viewport, and the screen-capture helper) to the
+# configured framebuffer size, keeping the 16:9 area centred.
+#
+# Window -> device scale is fb_w / 1280, done in the code as (w << k) + w
+# followed by >> m; the k / m pairs for the four framebuffer widths are
+# looked up from small tables indexed by ((fb_w / 80 - 6) % 5):
+#   960x544: x3 >> 2   720x408: x9 >> 4   640x368: x2 >> 2   480x272: x3 >> 3
+# Offsets are for module NID 0x2AE04E1D.
+
+[PCSE01177, eboot.bin, 0x2AE04E1D]
+@FB
+# sceDisplaySetFrameBuf(): width / height (pitch stays 1024)
+0:0xA0DDE t2_mov(1, 2, fb_w)
+0:0xA0DE2 t2_mov(1, 3, fb_h)
+# display data handed to the flip path: width / height
+0:0xA1504 t2_mov(1, 1, fb_w)
+0:0xA150A t2_mov(1, 2, fb_h)
+# display buffer init loop: height (r11) used by the colour surface and render target
+0:0xA39B6 t2_mov(1, 11, fb_h)
+# display buffer size: pitch 1024 * 4 bytes * height (256 KiB granular), never below the original 2 MiB
+0:0xA39CA t2_mov(1, 2, max(align(fb_h * 4096, 0x40000), 0x200000))
+0:0xA3A00 t2_mov(1, 1, max(align(fb_h * 4096, 0x40000), 0x200000))
+0:0xA3A10 t2_mov(1, 2, max(align(fb_h * 4096, 0x40000), 0x200000))
+# sceGxmColorSurfaceInit(): width
+0:0xA3A2A t2_mov(1, 4, fb_w)
+# sceGxmColorSurfaceSetClip(): the game clips to its 16:9 area, y from (fb_h - view_h) to (view_h - 1)
+0:0xA3A44 t3_mov(4, fb_w * 9 / 16 - 1)
+0:0xA3A4E t1_mov(2, fb_h - fb_w * 9 / 16)
+0:0xA3A50 t2_mov(1, 3, fb_w)
+# sceGxmCreateRenderTarget(): width
+0:0xA3A68 t2_mov(1, 0, fb_w)
+
+# set_viewport(x, y, w, h): window rect -> device (region clip + viewport)
+# add.w rD, rN, rN, lsr #31  ->  add.w rD, rN, rN, lsl #k
+0:0x6A156 uint16(0xEB02) . uint16(0x0902 | ((((0x3011 >> (4 * ((fb_w / 80 - 6) % 5))) & 15)) << 6))
+0:0x6A15A uint16(0xEB03) . uint16(0x0A03 | ((((0x3011 >> (4 * ((fb_w / 80 - 6) % 5))) & 15)) << 6))
+0:0x6A15E uint16(0xEB01) . uint16(0x0B01 | ((((0x3011 >> (4 * ((fb_w / 80 - 6) % 5))) & 15)) << 6))
+0:0x6A16A uint16(0xEB00) . uint16(0x0E00 | ((((0x3011 >> (4 * ((fb_w / 80 - 6) % 5))) & 15)) << 6))
+# mov.w rD, rM, asr #1  ->  asr #m  (imm3:imm2 field from a byte table)
+0:0x6A162 uint16(0xEA4F) . uint16(0x0929 | (((0x40020203 >> (8 * ((fb_w / 80 - 6) % 5))) & 255) << 6))
+0:0x6A166 uint16(0xEA4F) . uint16(0x0A2A | (((0x40020203 >> (8 * ((fb_w / 80 - 6) % 5))) & 255) << 6))
+0:0x6A16E uint16(0xEA4F) . uint16(0x0B2B | (((0x40020203 >> (8 * ((fb_w / 80 - 6) % 5))) & 255) << 6))
+0:0x6A1B8 uint16(0xEA4F) . uint16(0x042E | (((0x40020203 >> (8 * ((fb_w / 80 - 6) % 5))) & 255) << 6))
+# rsbs.w r4, sl, #368  ->  #fb_h  (letterbox rows = fb_h - device height, split top/bottom)
+0:0x6A174 uint16(0xF5DA) . uint16(0x7400 | ((1 - min(fb_h / 512, 1)) << 7) | ((fb_h >> (1 + min(fb_h / 512, 1))) & 127))
+
+# screen capture into a texture (transitions / effects): same window -> device mapping
+0:0x6A41A uint16(0xEB08) . uint16(0x0208 | ((((0x3011 >> (4 * ((fb_w / 80 - 6) % 5))) & 15)) << 6))
+0:0x6A41E uint16(0xEB09) . uint16(0x0309 | ((((0x3011 >> (4 * ((fb_w / 80 - 6) % 5))) & 15)) << 6))
+0:0x6A426 uint16(0xEB01) . uint16(0x0101 | ((((0x3011 >> (4 * ((fb_w / 80 - 6) % 5))) & 15)) << 6))
+0:0x6A42A uint16(0xEB00) . uint16(0x0000 | ((((0x3011 >> (4 * ((fb_w / 80 - 6) % 5))) & 15)) << 6))
+0:0x6A42E uint16(0xEB06) . uint16(0x0406 | ((((0x3011 >> (4 * ((fb_w / 80 - 6) % 5))) & 15)) << 6))
+0:0x6A446 uint16(0xEB07) . uint16(0x0207 | ((((0x3011 >> (4 * ((fb_w / 80 - 6) % 5))) & 15)) << 6))
+0:0x6A450 uint16(0xEB0A) . uint16(0x0A0A | ((((0x3011 >> (4 * ((fb_w / 80 - 6) % 5))) & 15)) << 6))
+0:0x6A454 uint16(0xEB0E) . uint16(0x040E | ((((0x3011 >> (4 * ((fb_w / 80 - 6) % 5))) & 15)) << 6))
+# asrs rD, rD, #1 (16-bit)  ->  #m
+0:0x6A422 uint16(0x1012 | ((((0x4223 >> (4 * ((fb_w / 80 - 6) % 5))) & 15)) << 6))
+0:0x6A424 uint16(0x101B | ((((0x4223 >> (4 * ((fb_w / 80 - 6) % 5))) & 15)) << 6))
+0:0x6A432 uint16(0x1000 | ((((0x4223 >> (4 * ((fb_w / 80 - 6) % 5))) & 15)) << 6))
+# rsb / mov.w with asr #1  ->  asr #m
+0:0x6A436 uint16(0xEBC2) . uint16(0x0621 | (((0x40020203 >> (8 * ((fb_w / 80 - 6) % 5))) & 255) << 6))
+0:0x6A45A uint16(0xEA4F) . uint16(0x0B22 | (((0x40020203 >> (8 * ((fb_w / 80 - 6) % 5))) & 255) << 6))
+0:0x6A460 uint16(0xEA4F) . uint16(0x0A2A | (((0x40020203 >> (8 * ((fb_w / 80 - 6) % 5))) & 255) << 6))
+0:0x6A510 uint16(0xEBCB) . uint16(0x0020 | (((0x40020203 >> (8 * ((fb_w / 80 - 6) % 5))) & 255) << 6))
+0:0x6A514 uint16(0xEBCA) . uint16(0x0521 | (((0x40020203 >> (8 * ((fb_w / 80 - 6) % 5))) & 255) << 6))
+# the hard-coded 4-row letterbox offset  ->  (fb_h - device height) / 2
+0:0x6A434 uint16(0x1C1D | (((fb_h - fb_w * 9 / 16) / 2) << 6))
+0:0x6A464 uint16(0xF10B) . uint16(0x0B00 | ((fb_h - fb_w * 9 / 16) / 2))
+0:0x6A522 uint16(0x1C06 | (((fb_h - fb_w * 9 / 16) / 2) << 6))

@@ -1,0 +1,24 @@
+# Mobile Suit Gundam: Extreme VS-Force [ASIA]
+# Source: VitaGrafixPatchlist issue #42 (xsm1997, 2021-02-24)
+
+# unknown version (no module NID in the issue)
+[PCSH00196, eboot.bin]
+@FB
+# FB
+0:0xA7A16 t2_mov(1, 3, fb_w)
+0:0xA7A1C t2_mov(1, 1, fb_h)
+0:0xA7A22 t2_mov(1, 3, fb_w)
+# Render Targets
+0:0x17942C t2_mov(1, 1, fb_w)
+0:0x179430 t2_mov(1, 2, fb_h)
+# Region Clipping
+1:0x890C8 fl32(fb_w)
+1:0x890CC fl32(fb_h)
+# UI
+0:0x6BE1C t1_movt(0, float(fb_w) >> 16)
+0:0x6BE2E t1_movt(0, float(fb_h) >> 16)
+# Lock-on & Weapon & Bloom
+0:0x11096C t2_mov(0, 0, fb_h)
+0:0x110970 08EE100A r
+0:0x110974 t2_mov(0, 0, fb_w)
+0:0x110978 08EE900A r

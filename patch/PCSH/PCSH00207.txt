@@ -1,0 +1,10 @@
+# Gundam Breaker 3 [ASIA]
+# Source: VitaGrafixPatchlist issue #62
+
+# unknown version
+[PCSH00207, eboot.bin, 0xD017E397]
+@IB
+0:0x47E9A2 t2_mov(1, 9, ib_w) . t2_mov(1, 8, ib_h)
+0:0x5139F0 t2_mov(1, 1, ib_w)
+0:0x5139F6 t2_mov(1, 1, ib_h)
+0:0x6032DA 00F0B4B8 r

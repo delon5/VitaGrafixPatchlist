@@ -1,0 +1,8 @@
+# Akiba's Trip: Undead & Undressed [US]
+# Source: VitaGrafixPatchlist issue #132
+
+# unknown version (no module NID in the issue)
+[PCSE00428, eboot.bin]
+@FPS
+0:0x020AB6 t1_mov(0, vblank)
+0:0x020A7E t1_mov(0, vblank)
