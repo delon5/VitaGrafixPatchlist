@@ -1,0 +1,32 @@
+# Final Fantasy X HD Remaster [US]
+#
+# PhyreEngine game (module ffx_phyreApp.self). The scene is drawn straight into
+# the three 960x544 display buffers (one 4x MSAA render target whose colour
+# surfaces are the display buffers with MSAA downscale), so @FB lowers both the
+# render and the display size and @IB does not apply. Every size is derived at
+# start-up from one display-config struct (app+0x294: width, height, ..., sample
+# count at +24) that the application constructor fills with immediates; the
+# render target, colour/depth surfaces, sceDisplaySetFrameBuf, viewport, region
+# clip and the game's screen rectangles all read from it. The only other
+# hard-coded 960x544 is the SceCommonDialogUpdateParam built by the dialog path.
+# The sample count (4 -> 4x) decides the render target multisample mode, the
+# colour surface scale mode, the depth stride/size and (copied on bind into
+# ctx+0xd8c) the multisample mode handed to sceGxmShaderPatcherCreateFragmentProgram.
+# The engine's own 2x path allocates the depth buffer with a stride of 2048
+# samples but only 1x rows, so the 2x case gets the 4x row count (memory x4).
+# Offsets are for module NID 0x70F290D1 (ffx_phyreApp.self).
+
+[PCSE00293, ffx_phyreApp.self, 0x70F290D1]
+@FB
+# app ctor: movs.w r2, #960 / movs.w r1, #544 -> display config width / height (config +0 / +4)
+0:0x9A8DA t2_mov(1, 2, fb_w)
+0:0x9A8E2 t2_mov(1, 1, fb_h)
+# dialog path: movs.w r1, #960 / movs.w r0, #544 -> SceCommonDialogUpdateParam width / height (stride 1024 stays);
+# this function has no caller in this build, patched for consistency only
+0:0xF22D0 t2_mov(1, 1, fb_w)
+0:0xF22D8 t2_mov(1, 0, fb_h)
+@MSAA
+# app ctor: str.w r7, [r4, #684] stores the sample count (r7 = 4); source register -> r1 (= 1) / r0 (= 2) / r7 (= 4)
+0:0x9A90E uint16(0xF8C4) . uint16(0x02AC | (((0x701 >> (4 * msaa)) & 15) << 12))
+# display builder: str r4, [sp, #264] -> str r0, [sp, #264]: depth row multiplier 2 (r0) instead of the mode (r4 = 1 for 2x)
+0:0x943F2 uint16(0x9042)

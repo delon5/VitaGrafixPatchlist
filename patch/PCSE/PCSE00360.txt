@@ -1,0 +1,27 @@
+# Disgaea 4: A Promise Revisited [US]
+#
+# NIS engine (dis4vita_vita, "PP047A"). The game draws straight into three
+# 960x544 display buffers (stride 1024) through one 960x544 render target,
+# so there is no separate internal resolution (@IB not applicable) and @FB
+# is not achieved (the 2D layout is in absolute screen pixels, ~390 hard-coded
+# 960/544 immediates plus 17 readers of the screen-size globals).
+# @FPS not provided: the game runs at 60 with one logic step per frame and no
+# timestep; its frame skipper is only enabled in a few game states, so a 30 FPS
+# cap would halve the game speed in menus/base (see the report).
+# Offsets are for module NID 0x98E13251.
+
+[PCSE00360, eboot.bin, 0x98E13251]
+@MSAA
+# sceGxmCreateRenderTarget() params: "strh.w r2,[sp,#36]; strh.w r5,[sp,#38]" (scenesPerFrame=1, multisampleMode=0)
+# -> "strh r2,[r0,#8]; movs r2,#msaa; strh r2,[r0,#10]; movs r2,#1" (r0 = &params, set by "mov r0, r8" just before)
+0:0x314D98 uint16(0x8102) . t1_mov(2, msaa) . uint16(0x8142) . uint16(0x2201)
+# depth buffer size: "lsls r0, r0, #2" (alignedW*alignedH*4) -> shift by 2 + msaa (x2 for 2x, x4 for 4x samples)
+0:0x314D4A uint16((2 + msaa) << 6)
+# sceGxmDepthStencilSurfaceInit() strideInSamples: "adds r3, r5, #0" -> "lsls r3, r5, #(msaa/2)" (doubles for 4x)
+0:0x314D6C uint16(0x002B | ((msaa / 2) << 6))
+# sceGxmColorSurfaceInit() scaleMode for the three display buffers: "movs r3, #0" -> MSAA downscale when enabled
+0:0x314CFC t1_mov(3, min(msaa, 1))
+# sceGxmColorSurfaceInit() scaleMode of the 960x544 render-to-texture surface (same render target): "movs r3, #0"
+0:0x31A6E2 t1_mov(3, min(msaa, 1))
+# shader builder argument "movs r1, #0" -> multisampleMode (r3) of all 104 sceGxmShaderPatcherCreateFragmentProgram calls
+0:0x314F08 t1_mov(1, msaa)

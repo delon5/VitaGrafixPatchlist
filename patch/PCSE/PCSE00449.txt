@@ -1,0 +1,45 @@
+# Rogue Legacy [US]
+#
+# Cellar Door Games' C++ XNA-style port (module RogueCastle, SilverWare
+# allocator). The scene is drawn into a 960x524 off-screen render target and
+# composited into a 960x544 display buffer through an XNA-like SpriteBatch
+# whose projection comes from the engine's logical 960x544 viewport, while the
+# GXM viewport is always the full render target (sceGxmSetViewport /
+# sceGxmSetRegionClip are never used). @FB therefore only has to move the
+# physical display objects; the logical size stays 960x544 and the picture is
+# scaled by the hardware. The display buffers keep their native 2 MiB
+# allocation (always >= the patched size), so the row clear / memset sizes
+# stay untouched.
+#
+# Frame pacing: the display queue callback (sceGxmInitialize, maxPending 2)
+# calls sceDisplaySetFrameBuf(sync=1) then one sceDisplayWaitVblankStart.
+# @FPS unrolls extra sceDisplayWaitVblankStart calls into the callback's
+# stack-canary check (a 24-byte fixed frame, the check is redundant): 1, 2 or
+# 3 waits for 60 / 30 / 20 FPS. The game timer is real time
+# (sceKernelGetProcessTime), so the game speed does not change.
+# Offsets are for module NID 0xF5B8765B.
+
+[PCSE00449, eboot.bin, 0xF5B8765B]
+@FB
+# display queue callback -> sceDisplaySetFrameBuf(): width / height (pitch 1024 >= every fb_w, unchanged)
+0:0x38A658 t2_mov(1, 2, fb_w)
+0:0x38A65C t2_mov(1, 3, fb_h)
+# display init: sceGxmCreateRenderTarget() wrapper args r1 = width, r2 = height
+0:0x387678 t2_mov(1, 1, fb_w)
+0:0x38767C t2_mov(1, 2, fb_h)
+# display init: sceGxmColorSurfaceInit() width / height (stride 1024 unchanged)
+0:0x3876FC t2_mov(1, 1, fb_w)
+0:0x387702 t2_mov(1, 1, fb_h)
+# present: SceCommonDialogUpdateParam.renderTarget width / height
+0:0x3878D8 t2_mov(1, 0, fb_w)
+0:0x3878DE t2_mov(1, 2, fb_h)
+@FPS
+# display queue callback after the first sceDisplayWaitVblankStart (blx 0x814C910C):
+#   60 FPS: original  ldr r1,[sp,#24] ; ldr r0,[r4] ; cmp r0,r1 ; bne.n +4   (stack-canary check)
+#   30 FPS: blx sceDisplayWaitVblankStart ; add sp,#32 ; pop {r4,pc}
+#   20 FPS: blx sceDisplayWaitVblankStart ; blx sceDisplayWaitVblankStart  (then the original add sp / pop)
+# selectors: vblank / 2 = 1 for 30 and 20 FPS, vblank / 3 = 1 for 20 FPS only
+0:0x38A670 uint16(0x9906 + ((vblank / 2) * 0x57D1))
+0:0x38A672 uint16(0x6820 + ((vblank / 2) * 0x87C4))
+0:0x38A674 uint16((0x4288 + ((vblank / 2) * 0x6D80)) + ((vblank / 3) * 0x40CF))
+0:0x38A676 uint16((0xD101 - ((vblank / 2) * 0x13F1)) + ((vblank / 3) * 0x32D2))

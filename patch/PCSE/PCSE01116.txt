@@ -1,0 +1,67 @@
+# Undertale [US]
+#
+# GameMaker: Studio 1.4 title on the YoYo Games "PSVitaRunner". The game is
+# drawn into a 640x480 application surface (size from game.win) which the
+# runner then fits, aspect-correct, into a 960x544 display target. The
+# runner keeps the display size in two data words (seg1+0x4194/0x4198,
+# read by display_get_width/height, the surface fit rectangle, the GUI
+# projection and the input mapping); @FB moves those words plus the
+# display render target, colour/depth surfaces and sceDisplaySetFrameBuf.
+# Display buffers keep their original allocation (pitch 1024, 0x240000).
+# @MSAA rewrites the two sceGxmCreateRenderTarget parameter blocks
+# (scenesPerFrame | multisampleMode << 16 stored as one word from a free
+# register), sets the colour surfaces to MSAA downscale, scales the depth
+# buffers (memory x2/x4, stride x2 for 4x) and passes the mode to the
+# three sceGxmShaderPatcherCreateFragmentProgram sites.
+# The display depth stride (0x201526) is patched only by @MSAA: 960 samples
+# (>= every selectable fb_w, 32-aligned, and the untouched 0x1FE000 buffer
+# already covers 960 x 544) so @FB does not need to touch it; each offset is
+# patched by exactly one line because overlapping injections are refused.
+# Offsets are for module NID 0x5881A7E7.
+
+[PCSE01116, eboot.bin, 0x5881A7E7]
+@FB
+# sceDisplaySetFrameBuf(): movs.w r2, #960 / movs.w r3, #544 (pitch 1024 stays)
+0:0x200744 t2_mov(1, 2, fb_w)
+0:0x200748 t2_mov(1, 3, fb_h)
+# display sceGxmCreateRenderTarget params: movs.w r1, #960 (width) / movs.w r1, #544 (height)
+0:0x2013C0 t2_mov(1, 1, fb_w)
+0:0x2013D0 t2_mov(1, 1, fb_h)
+# display sceGxmColorSurfaceInit (x3 buffers): movs.w r1, #960 (width) / movs.w r2, #544 (height), stride 1024 stays
+0:0x201496 t2_mov(1, 1, fb_w)
+0:0x20149C t2_mov(1, 2, fb_h)
+# display sceGxmDepthStencilSurfaceInit stride (0x201526) and memory 0x1FE000 stay: 960 samples >= every fb_w (see @MSAA)
+# runner display width/height globals (display_get_width/height, surface fit rect, GUI, input mapping)
+1:0x4194 uint32(fb_w)
+1:0x4198 uint32(fb_h)
+@MSAA
+# display render target params: strd fp,fp,[sp,#96]; movs r1,#1; str.w fp,[sp,#92]; strh.w r1,[sp,#100]
+# -> str.w fp,[sp,#92] (flags=0); movw r2,#1; movt r2,#msaa (scenes | mode<<16); nop
+0:0x2013B2 uint16(0xF8CD) . uint16(0xB05C) . t3_mov(2, 1) . t1_movt(2, msaa) . nop
+# strh.w fp,[sp,#102] -> strd r2,fp,[sp,#100]: scenesPerFrame=1, multisampleMode=msaa, multisampleLocations=0
+0:0x2013C4 uint16(0xE9CD) . uint16(0x2B19)
+# display sceGxmColorSurfaceInit: movs r3, #0 (scaleMode) -> MSAA downscale when multisampled
+0:0x2014B4 t1_mov(3, min(msaa, 1))
+# display depth buffer: movs.w r2/r1, #0x1FE000 (alloc / map size) -> x2 for 2x, x4 for 4x
+0:0x2014EC t2_mov(1, 2, 0x1FE000 << msaa)
+0:0x201502 t2_mov(1, 1, 0x1FE000 << msaa)
+# display depth stride: movs.w r3, #960 (strideInSamples, 32-aligned) -> 1920 for 4x; independent of @FB (960 >= fb_w)
+0:0x201526 t2_mov(1, 3, 960 << (msaa / 2))
+# surface_create render target params: strd r9,r9,[sp,#40] (redundant zeroing) -> movw r2, #2 (scenesPerFrame)
+0:0xB5F18 t3_mov(2, 2)
+# movs r2, #2; str r5,[sp,#36] -> movt r2, #msaa (scenes | mode<<16); the flags store moves to 0xB5F36
+0:0xB5F1C t1_movt(2, msaa)
+# strh.w r2,[sp,#44] -> strd r2,r5,[sp,#44]: scenesPerFrame=2, multisampleMode=msaa, multisampleLocations=0
+0:0xB5F32 uint16(0xE9CD) . uint16(0x250B)
+# strh.w r5,[sp,#46] (mode=0) -> str r5,[sp,#36] (flags=0, moved from 0xB5F1E); nop
+0:0xB5F36 uint16(0x9509) . nop
+# surface_create sceGxmColorSurfaceInit: movs r3, #0 (scaleMode) -> MSAA downscale when multisampled
+0:0xB5E56 t1_mov(3, min(msaa, 1))
+# surface_create depth memory: lsls r1, r1, #7 (aligned width * 4 bytes) -> #8 for 2x, #9 for 4x
+0:0xB5E7C uint16(0x0009 | ((7 + msaa) << 6))
+# surface_create depth stride: adds r3, r4, #0 (aligned width) -> lsls r3, r4, #1 for 4x (movs r3, r4 otherwise)
+0:0xB5F02 uint16(0x0023 | ((msaa / 2) << 6))
+# sceGxmShaderPatcherCreateFragmentProgram (all three sites): movs r3, #0 (multisampleMode) -> msaa
+0:0xB76AC t1_mov(3, msaa)
+0:0x200A26 t1_mov(3, msaa)
+0:0x20186A t1_mov(3, msaa)

@@ -1,0 +1,19 @@
+# Metal Gear Solid 3 HD Edition [US]
+#
+# Bluepoint engine (BPE), same code as MGS2 HD at different offsets. The scene
+# is drawn straight into the three 960x544 display buffers (render target
+# 960x544, scenes=3, depth stride 960), so @FB / @IB are not covered here (see
+# the report). Frame pacing lives in the sceGxm display-queue callback
+# (0x539F02): it waits vcount vblanks with sceDisplayWaitSetFrameBufMulti
+# before sceDisplaySetFrameBuf(sync=1) + sceDisplayWaitSetFrameBuf. vcount is
+# 2 (30 FPS) unless the engine's 60 FPS flag ctx+0x778 is set (vcount 1; never
+# set in this title). Game logic advances by the number of vblanks elapsed
+# (0x8168BA9C adds the vcount delta to the frame counter 0x823119D0), so the
+# game speed does not depend on the wait. Offsets are for module NID 0xC1967BAF.
+
+[PCSE00079, eboot.bin, 0xC1967BAF]
+@FPS
+# display callback, normal path: movs r0, #2 -> sceDisplayWaitSetFrameBufMulti(vblank)
+0:0x539F3E t1_mov(0, vblank)
+# display callback, engine 60 FPS path: movs r0, #1 -> sceDisplayWaitSetFrameBufMulti(vblank)
+0:0x539F8E t1_mov(0, vblank)

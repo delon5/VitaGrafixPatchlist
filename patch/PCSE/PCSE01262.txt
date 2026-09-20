@@ -1,0 +1,17 @@
+# Bloodstained: Curse of the Moon [US]
+#
+# Inti Creates engine. The game draws its 8-bit canvas into a 512x512 render
+# texture and composites it onto a 960x544 display target. The whole display
+# side (sceDisplaySetFrameBuf, display buffers, render target, colour/depth
+# surfaces, region clip, and the orthographic view the game builds through
+# getWidth()/getHeight()) is derived from one width/height pair stored in the
+# renderer object at init. @FB patches that pair; the engine aligns the pitch
+# to 64 itself (720 -> 768, 480 -> 512) and sizes the buffers from it.
+# Offsets are for module NID 0xCD78311A.
+
+[PCSE01262, eboot.bin, 0xCD78311A]
+@FB
+# renderer init: movs.w r0, #960 -> stored to renderer+0x1B8 (display width, read by every display setup path)
+0:0x42D6E0 t2_mov(1, 0, fb_w)
+# renderer init: movs.w r2, #544 -> stored to renderer+0x1BC (display height)
+0:0x42D6E8 t2_mov(1, 2, fb_h)

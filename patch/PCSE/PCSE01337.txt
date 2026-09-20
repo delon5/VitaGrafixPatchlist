@@ -1,0 +1,61 @@
+# Romancing SaGa 3 [US]
+#
+# GfxDeviceGXM keeps the display size as immediates: three 960x544 display colour
+# surfaces and one depth surface are created at device init (and again by the
+# quality-level change handler and a spare recreate path), the ScreenManager is told
+# SetResolutionImmediate(960, 544), the display-queue entry and the full-screen
+# viewport rects repeat the size.  Strides, allocation sizes, sceGxmSetViewport /
+# SetRegionClip, sceDisplaySetFrameBuf width/height/pitch and Screen.width/height
+# are all derived from those surfaces at run time, so @FB only rewrites the immediates.
+# The ScreenManager resolution list already holds 480x272/640x368/720x408/960x544.
+# Frame pacing: sceDisplayWaitSetFrameBufMulti(2) when QualitySettings.vSyncCount == 2.
+# Anti-aliasing: QualitySettings.antiAliasing (sample count 0/2/4/8) read at device
+# init and mapped to SceGxmMultisampleMode for the display surfaces; the fragment
+# programs are created per multisample mode by the engine.
+# Offsets are for module NID 0x844FB0E2.
+
+[PCSE01337, eboot.bin, 0x844FB0E2]
+@FB
+# GfxDeviceGXM init (fn 0x74041C): CreateRenderColorSurface loop (3 display buffers), width / height
+0:0x740AD4 t2_mov(1, 2, fb_w)    # movs.w r2, #960 -> colour surface width
+0:0x740ADC t2_mov(1, 3, fb_h)    # movs.w r3, #544 -> colour surface height
+# init: CreateRenderDepthSurface for the display buffers
+0:0x740B1A t2_mov(1, 2, fb_w)    # movs.w r2, #960 -> depth surface width (stride follows)
+0:0x740B22 t2_mov(1, 3, fb_h)    # movs.w r3, #544 -> depth surface height
+# init: ScreenManager->SetResolutionImmediate(w, h, 1, 0): Screen.width/height and the SetFrameBuf size
+0:0x740B62 t2_mov(1, 2, fb_h)    # movs.w r2, #544 -> height argument
+0:0x740B68 t2_mov(1, 1, fb_w)    # movs.w r1, #960 -> width argument
+# init: device stats / screen size record (fn 0x38550A stores w, h and w*h*bpp)
+0:0x740BFE t2_mov(1, 1, fb_w)    # movs.w r1, #960 -> width
+0:0x740C02 t2_mov(1, 2, fb_h)    # movs.w r2, #544 -> height
+# present (fn 0x73E432): sceGxmDisplayQueueAddEntry data {base, width, height, pitch, vsync} -> SetFrameBuf
+0:0x73E500 t2_mov(1, 10, fb_w)   # movs.w sl, #960 -> display width
+0:0x73E504 t2_mov(1, 8, fb_h)    # movs.w r8, #544 -> display height
+# quality-level change handler (fn 0x74694E): recreates the 3 colour surfaces and the depth surface
+0:0x746A9E t2_mov(1, 2, fb_w)    # movs.w r2, #960 -> colour surface width
+0:0x746AA2 t2_mov(1, 3, fb_h)    # movs.w r3, #544 -> colour surface height
+0:0x746ADC t2_mov(1, 2, fb_w)    # movs.w r2, #960 -> depth surface width
+0:0x746AE4 t2_mov(1, 3, fb_h)    # movs.w r3, #544 -> depth surface height
+# spare recreate path (fn 0x73FDE0, same loop; no caller found, patched for consistency)
+0:0x73FE48 t2_mov(1, 2, fb_w)    # movs.w r2, #960 -> colour surface width
+0:0x73FE50 t2_mov(1, 3, fb_h)    # movs.w r3, #544 -> colour surface height
+0:0x73FE7A t2_mov(1, 2, fb_w)    # movs.w r2, #960 -> depth surface width
+0:0x73FE8E t2_mov(1, 3, fb_h)    # movs.w r3, #544 -> depth surface height
+# SetRenderTarget (fn 0x7452xx): default target size used when no colour surface is bound
+0:0x745384 t2_mov(1, 1, fb_h)    # movs.w r1, #544 -> default height
+0:0x74538E t2_mov(1, 1, fb_w)    # movs.w r1, #960 -> default width
+# bind display buffer as target (fn 0x745732): SetViewport({0, 0, w, h})
+0:0x74580C t2_mov(1, 2, fb_w)    # movs.w r2, #960 -> viewport width
+0:0x745814 t2_mov(1, 3, fb_h)    # movs.w r3, #544 -> viewport height
+# SetRenderTargets (fn 0x747BA4): SetViewport({0, 0, w, h}) when the display buffer becomes current
+0:0x747CB2 t2_mov(1, 0, fb_w)    # movs.w r0, #960 -> viewport width
+0:0x747CB8 t2_mov(1, 2, fb_h)    # movs.w r2, #544 -> viewport height
+@FPS
+# present callback (fn 0x7488D8): if (vSyncCount == 2) WaitSetFrameBufMulti(2); then SetFrameBuf(sync) + WaitSetFrameBuf
+0:0x7488F8 uint16(0x2800 | (2 + (1 / vblank)))   # cmp r0, #2 -> at 60 FPS compare with 3 so the Multi wait is skipped
+0:0x748904 t1_mov(0, vblank)    # movs r0, #2 -> sceDisplayWaitSetFrameBufMulti(vblank) for the 30 / 20 FPS caps
+@MSAA
+# GfxDeviceGXM init (fn 0x74041C): QualitySettings.antiAliasing -> sample count for the display colour/depth surfaces
+0:0x740484 t2_mov(0, 0, 1 << msaa)    # ldr.w r0, [lr, #88] -> mov.w r0, #1/2/4 (mapped to SceGxmMultisampleMode 0/1/2)
+# quality-level change handler (fn 0x74694E): same value, so a quality change keeps the chosen mode
+0:0x746970 t2_mov(0, 11, 1 << msaa)   # ldr.w fp, [fp, #88] -> mov.w fp, #1/2/4

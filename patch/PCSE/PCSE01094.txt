@@ -1,0 +1,49 @@
+# Romancing SaGa 2 [US]
+#
+# Unity 5.4.2 player (UnityPlayer_542_Release, generic eboot; the game is only
+# identifiable from the title ID). The scene is rendered straight into the
+# three 960x544 display buffers (no off-screen scene target), so @FB is the
+# render resolution as well and @IB is not applicable. Frame pacing is
+# sceDisplayWaitSetFrameBufMulti(2) in the flip callback (QualitySettings
+# vSyncCount = 2, 30 FPS). Offsets are for module NID 0x91EEDAC8.
+
+[PCSE01094, eboot.bin, 0x91EEDAC8]
+@FB
+# ScreenManagerPSP2::GetResolutions(): the 960x544 entry (SetResolution picks the closest listed mode)
+0:0x54D650 t2_mov(1, 0, fb_w)
+0:0x54D658 t2_mov(1, 1, fb_h)
+# ScreenManager->SetResolutionImmediate(960, 544, 1): Screen.width/height, sceDisplaySetFrameBuf size, viewport y-flip
+0:0x55531A t2_mov(1, 2, fb_h)
+0:0x555320 t2_mov(1, 1, fb_w)
+# GfxDevicePSP2 init: the 3 display colour surfaces (render targets, texture views and memory follow)
+0:0x5546B2 t2_mov(1, 2, fb_w)
+0:0x5546BA t2_mov(1, 3, fb_h)
+# GfxDevicePSP2 init: the display depth/stencil surface
+0:0x5546E4 t2_mov(1, 2, fb_w)
+0:0x5546F8 t2_mov(1, 3, fb_h)
+# GfxDevice screen stats: back buffer width/height for memory accounting
+0:0x555384 t2_mov(1, 1, fb_w)
+0:0x555388 t2_mov(1, 2, fb_h)
+# sceGxmDisplayQueueAddEntry callback data: width/height, compared with Screen.width/height on flip
+0:0x552F9C t2_mov(1, 11, fb_w)
+0:0x552FA0 t2_mov(1, 10, fb_h)
+# SetRenderTargets(): target size used for viewport/scissor when the target is the back buffer
+0:0x559F86 t2_mov(1, 1, fb_h)
+0:0x559F90 t2_mov(1, 1, fb_w)
+# full-screen viewport rect {0, 0, 960, 544} passed to SetViewport at frame begin (two paths)
+0:0x55A37C t2_mov(1, 2, fb_w)
+0:0x55A382 t2_mov(1, 3, fb_h)
+0:0x55C2EC t2_mov(1, 0, fb_w)
+0:0x55C2F4 t2_mov(1, 2, fb_h)
+# colour surface stride = align(width, 32) * bpp: adds.w r0, r4, #31 / bics.w r0, r0, #31 -> #63 when fb_w is not
+# a multiple of 64, so the display pitch becomes 768 (720x408) / 512 (480x272) as sceDisplaySetFrameBuf requires
+0:0x55D76A uint16(0xF114) . uint16(0x001F | ((min((fb_w % 64), 1)) << 5))
+0:0x55D76E uint16(0xF030) . uint16(0x001F | ((min((fb_w % 64), 1)) << 5))
+@FPS
+# flip callback: movs r0, #2 -> sceDisplayWaitSetFrameBufMulti(vblank) when vSyncCount == 2 (1 = 60 FPS, 3 = 20 FPS)
+0:0x55CA96 t1_mov(0, vblank)
+@MSAA
+# GfxDevicePSP2 creation: ldr.w r9, [r9, #0x54] (QualitySettings antiAliasing samples) -> mov.w r9, #(msaa * 2)
+0:0x554CEC t2_mov(0, 9, msaa * 2)
+# quality re-apply (vtable 0x1e4): ldr r4, [r4, #0x54] -> movs r4, #(msaa * 2), so the buffers keep the chosen mode
+0:0x55A708 t1_mov(4, msaa * 2)

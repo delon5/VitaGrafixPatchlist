@@ -1,0 +1,58 @@
+# Darkest Dungeon [US]
+#
+# Red Hook engine (eboot.bin, module NID 0x6306BC87). The engine keeps the
+# screen size in two .data words (960, 544) that get_screen_size() hands to
+# the GXM device (display buffers, render target, colour + depth surfaces,
+# sceDisplaySetFrameBuf) and to the canvas (the 16:9 scene targets 960x540,
+# the camera and the UI scale) at start-up, so @FB is those two words.
+# The scene targets are composited 1:1 into the display, so there is no
+# separate internal resolution (@IB not applicable; @FB lowers everything).
+# The game has no frame limiter: it paces on the display queue (one vblank
+# per flip) and is GPU-bound around 30 FPS. @FPS adds the 30 FPS cap through
+# the hook line; the game's own vblank wait in the display-queue callback is
+# turned into two nops only when 30 is selected (60 and 20 keep the stock bytes).
+# @MSAA: both sceGxmCreateRenderTarget sites build the params struct on the
+# stack and store a zero register into multisampleMode; a redundant strd that
+# zeroes multisampleLocations/driverMemBlock (rewritten again just before the
+# call) is turned into 'mov.w ip, #msaa' and the strh takes ip. The two
+# fragment-program sites and the two colour-surface scaleMode sites are
+# immediates. All depth surfaces share the device's fixed depth block, which
+# grows to 8 MiB at 4x; the depth stride (in samples) is doubled at 4x.
+
+[PCSE00919, eboot.bin, 0x6306BC87]
+@FB
+# screen width / height words in seg1 .data (seg1+0x12F0 / +0x12F4 = 0x823013F0 / 0x823013F4 with the info.txt
+# seg1 base 0x82300100; 0x823020B0 / B4 in the dumped bytes), the only definition read by get_screen_size()
+1:0x12F0 uint32(fb_w)
+1:0x12F4 uint32(fb_h)
+@FPS
+# display-queue callback: blx sceDisplayWaitVblankStart (f2c2 c4b6) -> nop nop (bf00 bf00) when vblank == 2 only
+0:0x77DC6 uint16(0xF2C2 - (0x33C2 * ((vblank - 1) * (3 - vblank)))) . uint16(0xC4B6 - (0x05B6 * ((vblank - 1) * (3 - vblank))))
+# at 30 FPS the hook waits 2 vblanks after sceDisplaySetFrameBuf instead of the removed 1-vblank wait
+>sceDisplaySetFrameBuf_withWait()
+@MSAA
+# display render target (device init 0x78516): redundant 'strd r4, r4, [sp, #68]' (multisampleLocations /
+# driverMemBlock, rewritten by 0x78650 before the call; ip is dead until 0x78706) -> 'mov.w ip, #msaa'
+0:0x78622 t2_mov(0, 12, msaa)
+# display render target: 'strh.w r4, [sp, #66]' (params.multisampleMode = 0) -> 'strh.w ip, [sp, #66]' f8ad c042
+0:0x7864C ADF842C0 r
+# off-screen render targets (constructor 0x7A04C): redundant 'strd r2, r2, [sp, #36]' (rewritten by 0x7A140
+# before the call; ip unused in the function) -> 'mov.w ip, #msaa'
+0:0x7A11A t2_mov(0, 12, msaa)
+# off-screen render targets: 'strh.w r2, [sp, #34]' (params.multisampleMode = 0) -> 'strh.w ip, [sp, #34]' (f8ad c022)
+0:0x7A13C ADF822C0 r
+# sceGxmShaderPatcherCreateFragmentProgram multisampleMode (r3), both sites: 'movs r3, #0' -> msaa
+0:0x783BA t1_mov(3, msaa)
+0:0x796AC t1_mov(3, msaa)
+# sceGxmColorSurfaceInit scaleMode (r3): display surface 0x7871C and off-screen surfaces 0x7A0C0: 'movs r3, #0' -> 1 with MSAA
+0:0x78716 t1_mov(3, min(msaa, 1))
+0:0x7A0BE t1_mov(3, min(msaa, 1))
+# shared depth block (device+0x58, used by every depth surface): 'movs.w r1, #0x700000' -> 0x800000 at 4x
+# (960x544 4x: 1920x1088 samples x 4 bytes = 0x7F8000; 2x needs 0x3FC000 and keeps 7 MiB)
+0:0x7878E t2_mov(1, 1, 0x700000 + (0x100000 * (msaa >> 1)))
+# display depth strideInSamples: 'adds.w r4, r1, #31' (f111 041f) -> 'adds.w r4, r1, r1' (eb11 0401) at 4x;
+# the following 'bics r4, r4, #31' keeps 2*w for every framebuffer width (all multiples of 16)
+0:0x7879E uint16(0xF111 - (0x0600 * (msaa >> 1))) . uint16(0x041F - (0x001E * (msaa >> 1)))
+# off-screen depth strideInSamples: 'add.w r0, r9, #31' (f109 001f) -> 'add.w r0, r9, r9' (eb09 0009) at 4x;
+# the following 'bics r8, r0, #31' keeps 2*w (widths w*9/16 targets: 960/720/640/480, and 960x360)
+0:0x7A0C4 uint16(0xF109 - (0x0600 * (msaa >> 1))) . uint16(0x001F - (0x0016 * (msaa >> 1)))

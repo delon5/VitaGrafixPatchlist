@@ -1,0 +1,25 @@
+# Metal Gear Solid 2 HD Edition [US]
+#
+# Bluepoint engine (BPE). The scene is drawn straight into the three 960x544
+# display buffers (render target 960x544, scenes=3, depth stride 960), so
+# @FB / @IB are not covered here (see the report). Frame pacing lives in the
+# sceGxm display-queue callback (0x559A82): it waits vcount vblanks with
+# sceDisplayWaitSetFrameBufMulti, then sceDisplaySetFrameBuf(sync=1) +
+# sceDisplayWaitSetFrameBuf. vcount is 2 (30 FPS) unless the engine's own
+# per-stage "60 FPS when the frame time allows" mode is on (ctx+0x770 == 1,
+# vcount 1). The same mode logic (0x5A38E6) keeps a "60 FPS mode active" byte
+# (0x823CAE40) that the recompiled game code reads through the getter 0x5A3BAE
+# at 8 sites to choose 60-mode or 30-mode per-frame step sizes; the main frame
+# counter 0x8217B310 is instead advanced by the number of elapsed vblanks
+# (0x5A0ADA). Both are covered: the two vcounts follow vblank and the getter
+# returns 1 at 60 FPS and 0 otherwise. Offsets are for module NID 0x91734982.
+
+[PCSE00078, eboot.bin, 0x91734982]
+@FPS
+# display callback, normal path: movs r0, #2 -> sceDisplayWaitSetFrameBufMulti(vblank)
+0:0x559ABE t1_mov(0, vblank)
+# display callback, engine 60 FPS path: movs r0, #1 -> sceDisplayWaitSetFrameBufMulti(vblank)
+0:0x559B0E t1_mov(0, vblank)
+# "60 FPS mode active" getter: movw r0,#0xae40 / movt r0,#0x823c / ldrb r0,[r0] (10 bytes, bx lr follows)
+# -> mov.w r0, #1 at 60 FPS, #0 at 30/20 FPS, then 3 nops; its 8 game-code callers no longer read 0x823CAE40
+0:0x5A3BAE t2_mov(0, 0, max(0, (2 - vblank))) . nop *3

@@ -1,0 +1,65 @@
+# Tales of Hearts R [US]
+#
+# Bandai Namco toh_psp2 engine. The scene is drawn straight into the 960x544
+# display buffers (render target ctx+0x44, depth ctx+0x144); a 962x546 buffer
+# (display+2) and a 480x272 half-res target are post-process scratch. Every
+# size comes from one display-mode table in seg0 (0x1B6E88 widths, 0x1B6E98
+# heights, 0x1B6EA8 pitches; the GXM init reads entry 0 into ctx+0x50/+0x54/
+# +0x58), so @FB is the table entry; @IB is not applicable (no separate scene
+# target). The engine carries its own MSAA mode (ctx+0x4C, defaulted to 0 in
+# the context constructor) and a target-FPS float (ctx+0x5F0, 60.0 default,
+# game code sets 30.0/60.0 through the setter at 0x1334E): every render target,
+# colour/depth surface, fragment program and the vblank pacing derive from
+# those two fields. The engine has no 20 FPS mode, so FPS=20 behaves as 30.
+# Offsets are for module NID 0x5EAFDBC0.
+
+[PCSE00429, eboot.bin, 0x5EAFDBC0]
+@FB
+# display-mode table entry 0: width 960 / height 544 (.word), copied to ctx+0x50/+0x54 at 0x12924-0x12938;
+# feeds the 3 display buffers, the display+2 scratch target, depth rows, sceDisplaySetFrameBuf and the
+# display-buffer textures (pitch 1024 is kept: >= width and a multiple of 64)
+0:0x1B6E88 uint32(fb_w)
+0:0x1B6E98 uint32(fb_h)
+# render-to-texture helpers with hard-coded screen size (targets at 0x14A0C / 0x1528A, no depth surface)
+0:0x14956 t2_mov(1, 4, fb_w)    # movs.w r4, #960 -> width of capture texture/render target 0
+0:0x1495A t2_mov(1, 6, fb_h)    # movs.w r6, #544 -> its height
+0:0x15200 t2_mov(1, 1, fb_w)    # movs.w r1, #960 -> width of the second capture texture/render target
+0:0x15206 t2_mov(1, 2, fb_h)    # movs.w r2, #544 -> its height
+# constant orthographic projection matrices in seg0 data (right after the display-mode table): the post-pass
+# quads are built in pixel space from ctx+0x50/+0x54, so the matrices must follow the framebuffer.
+# matrix A (0x1B6EF8, 2/960 and -2/544): display-buffer path of every post pass (selected with movw r1,#0x6ef8
+# at 0x13F28, 0x140C2, 0x1429A, 0x144FC, 0x14644, 0x153C4, 0x15BAC -> vtable+0x20 set-projection)
+0:0x1B6EF8 fl32(2.0 / float(fb_w))          # .float 2/960 (m00) -> 2/fb_w
+0:0x1B6F0C fl32(0.0 - (2.0 / float(fb_h)))  # .float -2/544 (m11) -> -2/fb_h
+# matrix B (0x1B6F38, 2/962 and -2/546): the display+2 scratch target (w+2, h+2 at 0x129E8/0x12A80); used by
+# the 0x1360E post pass (movw r1,#0x6f38 at 0x13652) and copied with memcpy at 0x14F30
+0:0x1B6F38 fl32(2.0 / float(fb_w + 2))          # .float 2/962 (m00) -> 2/(fb_w+2)
+0:0x1B6F4C fl32(0.0 - (2.0 / float(fb_h + 2)))  # .float -2/546 (m11) -> -2/(fb_h+2)
+# constant full-screen quad (0x15BD6-0x15C3C, {u,v,colour,x,y,z} vertices, x = 0/960.0f, y = 0/544.0f) drawn
+# right after matrix A is set at 0x15BAC: movt r0,#hi16(960.0f) / movt r0,#hi16(544.0f) -> hi16 of float(fb_w/fb_h)
+# (hi16 of a float v in 256..1023: v >= 512 -> 0x4400 + ((v-512) >> 2), else 0x4380 + ((v-256) >> 1))
+0:0x15C26 t1_movt(0, ((fb_w >> 9) * (0x4400 + ((fb_w - 512) >> 2))) + ((1 - (fb_w >> 9)) * (0x4380 + ((fb_w - 256) >> 1))))
+0:0x15C32 t1_movt(0, ((fb_h >> 9) * (0x4400 + ((fb_h - 512) >> 2))) + ((1 - (fb_h >> 9)) * (0x4380 + ((fb_h - 256) >> 1))))
+@FPS
+# target-FPS setter (0x1334E): ignore the argument, store fps as 2 * (fps/2) since 60.0 is not a VMOV
+# immediate, and hand the vblank count to the helper at 0x1619A instead of "2 if 30 else 1"
+0:0x13350 t2_vmov(1, float(30 / min(vblank, 2))) # vmov.f32 s1, #30.0 -> s1 = fps/2 (30 or 15)
+0:0x13354 uint16(0xEE30) . uint16(0x0AA0)        # mov.w r1, #0x5f0 -> vadd.f32 s0, s1, s1 (s0 = fps)
+0:0x13358 uint16(0xF500) . uint16(0x60BE)        # adds r0, r0, r1 / vstr -> add.w r0, r0, #0x5f0
+0:0x1335C uint16(0xED80) . uint16(0x0A00)        # -> vstr s0, [r0] (ctx+0x5F0 = fps)
+0:0x13360 t1_mov(0, min(vblank, 2)) . nop *5     # vcmp/vmrs/bne/movs r0,#2 -> r0 = vblank count
+# context constructor default fps 60.0 (movs r0,#0 ; movt r0,#0x4270): movt -> high half of fps as float
+0:0x11D88 t1_movt(0, 0x4270 - ((min(vblank, 2) - 1) * 0x80))
+# vblank waits chosen from "fps == 30.0 ? 2 : 1": helper 0x12080, display-queue callback data (+12,
+# used by the flip callback vcount loops at 0x11C86-0x11CB8) and the wait after sceGxmDisplayQueueAddEntry
+0:0x1209A t1_mov(0, min(vblank, 2))    # movs r0, #2 -> sceDisplayWaitVblankStartMultiCB count (30 mode)
+0:0x120A2 t1_mov(0, min(vblank, 2))    # movs r0, #1 -> same (60 mode)
+0:0x12112 t1_mov(1, min(vblank, 2))    # movs r1, #2 -> callback data vcount (30 mode)
+0:0x12106 t1_mov(1, min(vblank, 2))    # movs r1, #1 -> callback data vcount (60 mode)
+0:0x1219A t1_mov(0, min(vblank, 2))    # movs r0, #2 -> sceDisplayWaitVblankStartMultiCB after the flip (30)
+0:0x121A8 t1_mov(0, min(vblank, 2))    # movs r0, #1 -> same (60 mode)
+@MSAA
+# context constructor: rewrite the vtable store so the prologue also stores msaa into ctx+0x4C
+# (adds r4,r0 / movw r1,#0x9ff8 / movt r1,#0x811b / str r1,[r4] / movs r0,#msaa / str r0,[r4,#0x4c])
+0:0x11D56 uint16(0x1C04) . t3_mov(1, 0x9FF8) . t1_movt(1, 0x811B) . uint16(0x6021) . t1_mov(0, msaa) . uint16(0x64E0)
+0:0x11D80 nop                          # str r1, [r4, #0x4c] (msaa = 0) -> removed
