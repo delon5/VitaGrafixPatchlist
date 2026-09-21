@@ -1,0 +1,63 @@
+# The Legend of Heroes: Zero no Kiseki Evolution [JP]
+#
+# Chara-Ani 2012 port of the Falcom PSP game on the "Hachi" engine (module "nana"),
+# the 2012 build of the engine that also runs Ao no Kiseki Evolution (PCSG00246).
+# The scene is drawn straight into the 960x544 display buffer.
+#
+# @MSAA is the only complete option in this file. Every fragment program is created
+# at one call site (r3 = multisampleMode), so all render targets must and do get the
+# same mode: the five sceGxmCreateRenderTarget sites, the five sceGxmColorSurfaceInit
+# scale modes and all four sceGxmDepthStencilSurfaceInit strides plus their memory
+# blocks are scaled together (2x doubles the sample rows, 4x doubles both axes).
+#
+# @FPS is NOT in this file. The vcount + clock-retiming construction works and is
+# verified (see PCSG00042.report.md), but the minigame mode (fn 0x15252E, ids 0/3/8/9/
+# 10/11/42/43/50/51/52) runs its whole logic once per rendered frame with integer frame
+# counters (e.g. fn 0x172E46 timeline [+0x444] vs 50/60/61/81/93/103/144), so it would
+# run at double speed at 60 FPS. Per the brief a partial unlock stays in the report.
+# @FB  not achieved: 960/544 are hard-coded through the whole display path and the 2D
+#       layer; there is no final blit to rescale (see the report).
+# @IB  not applicable: the scene is drawn into the display buffer; the engine's dormant
+#       low-resolution path (ctx+0x3594, fns 0x11774C/0x117764) has no caller.
+
+# eboot.bin from ux0:/patch (patched release, no version string), module NID 0xDD2B3D3B
+[PCSG00042, eboot.bin, 0xDD2B3D3B]
+@MSAA
+# sceGxmShaderPatcherCreateFragmentProgram(): movs r3, #0 -> multisampleMode (single site for every program)
+0:0x1225A4 t1_mov(3, msaa)
+# display render target params (scenesPerFrame=1 in r1):
+#   strh.w r1, [sp, #128] -> movt r1, #msaa ; strh.w r2(=0), [sp, #130] -> str.w r1, [sp, #128]
+0:0x114468 t1_movt(1, msaa)
+0:0x11446E CDF88010 r
+# overlay/movie render targets (2x 960x544, scenesPerFrame=1 in r2):
+#   strh.w r2, [sp, #88] -> movt r2, #msaa ; strh.w r5(=0), [sp, #90] -> str.w r2, [sp, #88]
+0:0x114824 t1_movt(2, msaa)
+0:0x11482C CDF85820 r
+# off-screen scene render target (unreachable low-res mode, kept consistent):
+#   strh.w r3(=1), [sp, #64] -> movt r3, #msaa ; strh.w r9(=0), [sp, #66] -> str.w r3, [sp, #64]
+0:0x116EC4 t1_movt(3, msaa)
+0:0x116ECC CDF84030 r
+# render-to-texture targets (256x256, 128x128, 960x544; scenesPerFrame=1 in r2):
+#   strh.w r2, [sp, #32] -> movt r2, #msaa ; strh.w r5(=0), [sp, #34] -> str.w r2, [sp, #32]
+0:0x11C008 t1_movt(2, msaa)
+0:0x11C00C CDF82020 r
+# sceGxmColorSurfaceInit(): movs r3, #0 -> scaleMode (MSAA downscale when MSAA is on), all five surfaces
+0:0x1142DE t1_mov(3, min(msaa, 1))
+0:0x116374 t1_mov(3, min(msaa, 1))
+0:0x1167D4 t1_mov(3, min(msaa, 1))
+0:0x116E92 t1_mov(3, min(msaa, 1))
+0:0x11BFDE t1_mov(3, min(msaa, 1))
+# display depth/stencil: movs.w r3, #960 -> strideInSamples (x2 for 4x); its CDRAM block and mapping: 2 MiB -> x2 / x4
+0:0x1143E2 t2_mov(1, 3, 960 << (msaa / 2))
+0:0x114348 t2_mov(1, 2, 0x200000 << msaa)
+0:0x1143B0 t2_mov(1, 1, 0x200000 << msaa)
+# 256-sample depth/stencil (ctx+0x1C54): movs.w r1, #0x20000 -> heap size ; movs.w r3, #256 -> strideInSamples
+0:0x1149E2 t2_mov(1, 1, 0x20000 << msaa)
+0:0x114A34 t2_mov(1, 3, 256 << (msaa / 2))
+# texture depth/stencil helpers: lsls r1, r1, #1 (0x0049, size = alignedW * alignedH * 2) -> lsls r1, r1, #(1 + msaa)
+#   (imm5 field bits 10..6 cleared in the base 0x0009: 0x0049 / 0x0089 / 0x00C9 = #1 / #2 / #3);
+#   adds r3, r6, #0 / adds r3, r4, #0 (strideInSamples = aligned width) -> lsls r3, rN, #(msaa / 2)
+0:0xE064A uint16(0x0009 | ((1 + msaa) << 6))
+0:0xE0662 uint16(0x0033 | ((msaa / 2) << 6))
+0:0xE0848 uint16(0x0009 | ((1 + msaa) << 6))
+0:0xE0860 uint16(0x0023 | ((msaa / 2) << 6))
