@@ -1,0 +1,131 @@
+# Super Robot Wars V [ASIA]
+#
+# B.B. Studio "Kuro" engine (+ srlib 1.1), module VITA / eboot.bin, NID 0x373CE5C7.
+# Native state: 960x544 display, 3 CDRAM display buffers (pitch 1024 px), depth S8D24
+# tiled stride 960, 60 Hz frame-locked (vblank count 1).  MSAA is off on both render
+# targets; of the 36 sceGxmShaderPatcherCreateFragmentProgram sites, 32 pass mode 0 and
+# 4 are srlib's alternate 2x/4x variants of two programs (modes 1 and 2).
+#
+# @FB  lowers the display AND the render resolution: the map, menus and battle
+#      animations are drawn straight into the display buffers, so shrinking the
+#      render target / colour surface shrinks the whole scene.  All game geometry
+#      reaches the GPU already in clip space (the engine divides device pixels by the
+#      constant 960/544 and never queries the surface), so no UI, layout or scaler
+#      constant is touched - the picture scales as a whole, exactly as the engine's
+#      own off-screen views already render at 720x408 with the same geometry.
+#      It does NOT shrink the off-screen 1920x1088 effect atlas, which stays at stock
+#      size at every setting (see the report: part of the frame cost does not scale).
+# @MSAA gives the choice of 2x/4x on the display target and the one off-screen
+#      render-to-texture target.  All 36 sceGxmShaderPatcherCreateFragmentProgram
+#      sites are switched with it, including srlib's four alternate-slot programs, so
+#      whichever slot srlib's selector picks the program matches the target: the
+#      module's only six sceGxmBeginScene sites (0:0x4D3D0, 0:0x61312, 0:0x61350,
+#      0:0x613F4, 0:0x61434, 0:0x65AFC) all bind a Kuro target, and both Kuro targets
+#      are switched here.  4x costs about +30 MiB of main RAM, 2x about +10 MiB.
+#
+# NOT A NO-OP AT "none": @FB at 960x544 is byte-identical to the stock game, but @MSAA
+#      at "none" is NOT.  Four of its lines rewrite srlib's alternate-slot fragment
+#      programs from their stock modes 1 and 2 to 0 (0:0x240B6 and 0:0x2413E were
+#      "movs r3,#1", 0:0x240DE and 0:0x24166 were "movs r3,#2").  Mode 0 is the mode
+#      of both render targets at that setting, so the slots then agree with the target
+#      instead of disagreeing with it, and srlib never begins a scene of its own - but
+#      it is a changed byte, not a restored one.  Leave @MSAA off to run stock.
+#
+# Known limitations / not shipped:
+# - @IB  not applicable: there is no scene buffer separate from the display buffer.
+# - @FPS not achieved: menus and map are already 60 FPS and frame-locked, battles are
+#        frame-locked at 30 with no timestep constant to patch.
+# - The dump contained no runtime records, so every value below was traced statically;
+#   @MSAA in particular has never been run on hardware, and the display render target
+#   (0:0x4CB58) and the atlas (0:0x5E6AE) both ignore sceGxmCreateRenderTarget's return
+#   value, so a mode the driver refuses is a crash, not a fallback.  See the report.
+
+[PCSH10001, eboot.bin, 0x373CE5C7]
+@FB
+# display-queue callback 0x4C708: SceDisplayFrameBuf.width / .height
+0:0x4C72C t2_mov(1, 2, fb_w)                 # movs.w r2,#960 -> .width  (pitch stays 1024)
+0:0x4C730 t2_mov(1, 3, fb_h)                 # movs.w r3,#544 -> .height
+# graphics init 0x4C8D6: sceGxmCreateRenderTarget params (handle -> 0x816BA30C)
+0:0x4CB2A t2_mov(1, 1, fb_w)                 # movs.w r1,#960 -> params.width
+0:0x4CB30 t2_mov(1, 2, fb_h)                 # movs.w r2,#544 -> params.height
+# the three display colour surfaces (0x816BA25C+0x30*i), sceGxmColorSurfaceInit 0x4CC28
+0:0x4CC06 t2_mov(1, 1, fb_w)                 # movs.w r1,#960 -> width  (stride stays 1024)
+0:0x4CC0C t2_mov(1, 1, fb_h)                 # movs.w r1,#544 -> height
+# screen object 0x5EB48: the 3 display buffers as textures (sceGxmTextureInitLinearStrided)
+0:0x5EB94 t2_mov(1, 3, fb_w)                 # movs.w r3,#960 -> texture width
+0:0x5EB7E t2_mov(1, 2, fb_h)                 # movs.w r2,#544 -> texture height (stride stays 4096)
+# SceCommonDialogUpdateParam @0x81676408, built at 0x3170C, used by the swap at 0x4D2FE
+0:0x31724 t2_mov(1, 1, fb_w)                 # movs.w r1,#960 -> param.width (stride stays 1024)
+0:0x3172A t2_mov(1, 2, fb_h)                 # movs.w r2,#544 -> param.height
+# per-frame SceCommonDialogUpdateParam on the stack (0x12FA36, reached from the swap)
+0:0x12FA66 t2_mov(1, 0, fb_w)                # movs.w r0,#960 -> param.width
+0:0x12FA6E t2_mov(1, 2, fb_h)                # movs.w r2,#544 -> param.height
+# the unreferenced twin of the block above (0x12F9C2) - patched so it cannot go stale
+0:0x12F9F2 t2_mov(1, 0, fb_w)                # movs.w r0,#960 -> param.width
+0:0x12F9FA t2_mov(1, 2, fb_h)                # movs.w r2,#544 -> param.height
+# set_sub_region_clip 0x64D1A, display branch: the pixel rect an NDC rect is mapped onto
+0:0x64D6A t3_mov(1, (fb_w - 1))              # movw r1,#959 -> xMax = fb_w-1
+0:0x64D6E t3_mov(3, (fb_h - 1))              # movw r3,#543 -> yMax = fb_h-1
+# kuro_begin_display_scene 0x4D376 full-screen region clip: a real display-pixel rect
+# (-> helper 0x5016C -> sceGxmSetRegionClip 0x5018A).  Its one caller 0x4B6D0 sits in
+# fn 0x4B6BA, which has no BL/BLX caller and no pointer word in seg0 or seg1, so this
+# pair is INERT: patched only so the rect cannot go stale if that chain is ever live.
+0:0x4D3D8 t3_mov(2, (fb_w - 1))              # movw r2,#959 -> xMax = fb_w-1
+0:0x4D3DC t3_mov(3, (fb_h - 1))              # movw r3,#543 -> yMax = fb_h-1
+@MSAA
+# display render target 0x4CB58: params.multisampleMode is stored from the zero register,
+# so the strh.w + the following add are re-encoded as three 16-bit instructions (6 bytes).
+0:0x4CB4A 17A8r . t1_mov(3, msaa) . 4381r    # add r0,sp,#92 ; movs r3,#msaa ; strh r3,[r0,#10]
+0:0x4CC26 t1_mov(3, min(msaa, 1))            # movs r3,#0 -> colour surface scaleMode MSAA_DOWNSCALE
+0:0x4CC90 t2_mov(1, 4, 2088960 << msaa)      # movs.w r4,#0x1FE000 -> sceGxmMapMemory size of the depth
+0:0x4CC94 t2_mov(1, 2, 2088960 << msaa)      # movs.w r2,#0x1FE000 -> depth AllocMemBlock size
+0:0x4CCA8 uint16(0x2300)                     # ldr r4,[sp,#192] -> movs r3,#0 (moved up from 0x4CCBA)
+0:0x4CCB6 t2_mov(1, 2, 2097152 << msaa)      # movs.w r2,#0x200000 -> depth fallback alloc size
+0:0x4CCBA uint16(0x4614)                     # movs r3,#0 -> mov r4,r2 (fallback map size = alloc size)
+0:0x4CCFA t2_mov(1, 3, 960 << (msaa / 2))    # movs.w r3,#960 -> depth strideInSamples
+# render-to-texture target (the 1920x1088 atlas), create() 0x5E594
+0:0x5E5F6 t1_mov(3, min(msaa, 1))            # movs r3,#0 -> RTT colour surface scaleMode
+0:0x5E64E uint16(9 | ((2 + msaa) << 6))      # lsls r1,r1,#2 -> #(2+msaa): RTT depth bytes
+0:0x5E666 uint16(43 | ((msaa / 2) << 6))     # adds r3,r5,#0 -> lsls r3,r5,#(msaa/2): depth stride
+0:0x5E6A6 t1_mov(2, msaa) . 4281r            # strh.w r6,[sp,#34] -> movs r2,#msaa ; strh r2,[r0,#10]
+# fragment programs, srlib: two programs x three slots [mat+0x1C..0x24] and [mat+0x28..0x30].
+# The draw-time selector 0x211C8 picks slot [target+0x88] of the bound target; the bound
+# target is always one of the two Kuro targets patched above, so every slot gets msaa.
+0:0x24088 t1_mov(3, msaa)                    # movs r3,#0 -> [mat+0x1C] (program A, slot 0)
+0:0x240B6 t1_mov(3, msaa)                    # movs r3,#1 -> [mat+0x20] (program A, slot 1)
+0:0x240DE t1_mov(3, msaa)                    # movs r3,#2 -> [mat+0x24] (program A, slot 2)
+0:0x24116 t1_mov(3, msaa)                    # movs r3,#0 -> [mat+0x28] (program B, slot 0)
+0:0x2413E t1_mov(3, msaa)                    # movs r3,#1 -> [mat+0x2C] (program B, slot 1)
+0:0x24166 t1_mov(3, msaa)                    # movs r3,#2 -> [mat+0x30] (program B, slot 2)
+# fragment programs, Kuro sites that pass the immediate 0
+0:0x4AD56 t1_mov(3, msaa)                    # movs r3,#0 -> multisampleMode
+0:0x4AE22 t1_mov(3, msaa)                    # movs r3,#0 -> multisampleMode
+0:0x4AF28 t1_mov(3, msaa)                    # movs r3,#0 -> multisampleMode
+0:0x4B7EC t1_mov(3, msaa)                    # movs r3,#0 -> multisampleMode
+0:0x4CF0E t1_mov(3, msaa)                    # movs r3,#0 -> multisampleMode (screen-clear program)
+0:0x4FC3E t1_mov(3, msaa)                    # movs r3,#0 -> multisampleMode
+0:0x4FC66 t1_mov(3, msaa)                    # movs r3,#0 -> multisampleMode
+0:0x4FC8E t1_mov(3, msaa)                    # movs r3,#0 -> multisampleMode
+0:0x4FCB8 t1_mov(3, msaa)                    # movs r3,#0 -> multisampleMode
+0:0x4FCE0 t1_mov(3, msaa)                    # movs r3,#0 -> multisampleMode
+# fragment programs, material system: r3 is [material+0x350], a compile-time 0
+0:0x6F184 t1_mov(3, msaa)                    # adds r3,r5,#0 -> movs r3,#msaa
+0:0x6F1DE t2_mov(0, 3, msaa)                 # ldr.w r3,[r8,#0x350] -> mov.w r3,#msaa
+0:0x7063A t2_mov(0, 3, msaa)                 # ldr.w r3,[r7,#0x350] -> mov.w r3,#msaa
+0:0x707AE t2_mov(0, 3, msaa)                 # ldr.w r3,[r7,#0x350] -> mov.w r3,#msaa
+0:0x7090A t2_mov(0, 3, msaa)                 # ldr.w r3,[r7,#0x350] -> mov.w r3,#msaa
+0:0x70A94 t2_mov(0, 3, msaa)                 # ldr.w r3,[r7,#0x350] -> mov.w r3,#msaa
+0:0x70BF4 t2_mov(0, 3, msaa)                 # ldr.w r3,[r7,#0x350] -> mov.w r3,#msaa
+0:0x70DAE t2_mov(0, 3, msaa)                 # ldr.w r3,[r9,#0x350] -> mov.w r3,#msaa
+0:0x70EF6 t2_mov(0, 3, msaa)                 # ldr.w r3,[r7,#0x350] -> mov.w r3,#msaa
+0:0x71070 t2_mov(0, 3, msaa)                 # ldr.w r3,[r7,#0x350] -> mov.w r3,#msaa
+0:0x7122E t2_mov(0, 3, msaa)                 # ldr.w r3,[r9,#0x350] -> mov.w r3,#msaa
+0:0x71396 t2_mov(0, 3, msaa)                 # ldr.w r3,[r7,#0x350] -> mov.w r3,#msaa
+0:0x714FA t2_mov(0, 3, msaa)                 # ldr.w r3,[r7,#0x350] -> mov.w r3,#msaa
+0:0x716B6 t2_mov(0, 3, msaa)                 # ldr.w r3,[r9,#0x350] -> mov.w r3,#msaa
+0:0x71874 t2_mov(0, 3, msaa)                 # ldr.w r3,[r9,#0x350] -> mov.w r3,#msaa
+0:0x71A36 t2_mov(0, 3, msaa)                 # ldr.w r3,[r9,#0x350] -> mov.w r3,#msaa
+0:0x71BEE t2_mov(0, 3, msaa)                 # ldr.w r3,[r9,#0x350] -> mov.w r3,#msaa
+0:0x71D30 t2_mov(0, 3, msaa)                 # ldr.w r3,[r7,#0x350] -> mov.w r3,#msaa
+0:0x71EF4 t2_mov(0, 3, msaa)                 # ldr.w r3,[r9,#0x350] -> mov.w r3,#msaa
+0:0x72510 t1_mov(3, msaa)                    # mov r3,ip -> movs r3,#msaa
