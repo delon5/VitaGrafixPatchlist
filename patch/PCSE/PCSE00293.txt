@@ -1,11 +1,11 @@
 # Final Fantasy X HD Remaster [US]
 #
 #
-# Multisampling is NOT offered. The engine applies it to the display render
-# target only: the scene is drawn into off-screen buffers whose sample count is
-# a hard-coded 4 at 0:0xDDEB0 and 0:0xDDF44, so selecting none or 2x would leave
-# every piece of scene geometry at 4x while claiming otherwise.
+# Multisampling covers the DISPLAY render target only. The scene is drawn into
+# off-screen buffers whose sample count is a hard-coded 4 at 0:0xDDEB0 and
+# 0:0xDDF44, so scene geometry stays at 4x whatever this is set to.
 #
+# Display size, internal resolution and multisampling in ONE file: no offset is
 # shared between the three blocks, so unlike the sibling PCSE00283 this title
 # needs no second variant file. Every block can be selected on its own or
 # together with the others.
@@ -68,11 +68,13 @@
 # samples 472.5x267.75 - up to one pixel of the composite edge reads
 # uninitialised target.
 #
+# @MSAA is unchanged from the previous revision of this file and is NOT a
 # complete option: its two lines change the DISPLAY render target only (the
 # config sample count and the display builder's depth row multiplier). The
 # off-screen PostProcessManager colour and depth buffers - the targets the scene
 # geometry is actually drawn into - carry their own hard-coded type byte 4
 # (movs r0, #4 at 0:0xDDEB0 and 0:0xDDF44), which this block does not touch, so
+# selecting "none" or "2x" leaves all scene geometry at 4x multisampling.
 # Offsets are for module NID 0x70F290D1 (ffx_phyreApp.self).
 
 [PCSE00293, ffx_phyreApp.self, 0x70F290D1]
@@ -157,3 +159,8 @@
 0:0x102824 uint16(0x0F50+min(max(32*ib_w/fb_w,16),32)%16)
 0:0x10BF48 uint16(0xEF86+min(max(32*ib_w/fb_w,16),32)/32)
 0:0x10BF4A uint16(0x0F50+min(max(32*ib_w/fb_w,16),32)%16)
+@MSAA
+# app ctor: str.w r7, [r4, #684] stores the sample count (r7 = 4); source register -> r1 (= 1) / r0 (= 2) / r7 (= 4)
+0:0x9A90E uint16(0xF8C4) . uint16(0x02AC | (((0x701 >> (4 * msaa)) & 15) << 12))
+# display builder: str r4, [sp, #264] -> str r0, [sp, #264]: depth row multiplier 2 (r0) instead of the mode (r4 = 1 for 2x)
+0:0x943F2 uint16(0x9042)
