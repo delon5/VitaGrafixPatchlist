@@ -1,32 +1,159 @@
 # Final Fantasy X HD Remaster [US]
 #
-# PhyreEngine game (module ffx_phyreApp.self). The scene is drawn straight into
-# the three 960x544 display buffers (one 4x MSAA render target whose colour
-# surfaces are the display buffers with MSAA downscale), so @FB lowers both the
-# render and the display size and @IB does not apply. Every size is derived at
-# start-up from one display-config struct (app+0x294: width, height, ..., sample
-# count at +24) that the application constructor fills with immediates; the
-# render target, colour/depth surfaces, sceDisplaySetFrameBuf, viewport, region
-# clip and the game's screen rectangles all read from it. The only other
-# hard-coded 960x544 is the SceCommonDialogUpdateParam built by the dialog path.
-# The sample count (4 -> 4x) decides the render target multisample mode, the
-# colour surface scale mode, the depth stride/size and (copied on bind into
-# ctx+0xd8c) the multisample mode handed to sceGxmShaderPatcherCreateFragmentProgram.
-# The engine's own 2x path allocates the depth buffer with a stride of 2048
-# samples but only 1x rows, so the 2x case gets the 4x row count (memory x4).
+#
+# Multisampling is NOT offered. The engine applies it to the display render
+# target only: the scene is drawn into off-screen buffers whose sample count is
+# a hard-coded 4 at 0:0xDDEB0 and 0:0xDDF44, so selecting none or 2x would leave
+# every piece of scene geometry at 4x while claiming otherwise.
+#
+# shared between the three blocks, so unlike the sibling PCSE00283 this title
+# needs no second variant file. Every block can be selected on its own or
+# together with the others.
+#
+# PhyreEngine game (module ffx_phyreApp.self), same application framework as
+# FFX-2 HD Remaster (PCSE00283) at different offsets. The display config
+# (app+0x294: width, height, ..., sample count at +24) is filled by the
+# application constructor with immediates and feeds the display render target,
+# the three display buffers, the depth surface, sceDisplaySetFrameBuf, the
+# viewport / region clip and the game's screen rectangles.
+# THE SCENE IS NOT DRAWN INTO THE DISPLAY BUFFERS. PostProcessManager::create
+# (0xDE704, called at 0xC031C with config+0 / config+4) stores the display size
+# at ppm+0x145C / ppm+0x1460, and the deferred setup 0xDDDF8 builds from it an
+# off-screen "PostProcessManager_colorBuffer" texture render target (type byte
+# 4 = 4x MSAA, 0xDDEB0) plus "PostProcessManager_depthBuffer" (0xDDF44) and two
+# half-size targets; the scene is composited from there onto the display. When
+# the low-resolution flag ppm+0x1425 is set the game renders only a 0.75-scaled
+# sub-rectangle of that target (960x544 -> 720x408) and samples it back with a
+# (0.75, 0.75) "UvScaleBias". @IB is that scale.
+#
+# INTERNAL SCALE. S = K / 32, K = min(max(32*ib_w/fb_w,16),32): the VFP and NEON
+# float immediates only encode multiples of 1/32 in [0.5, 1.0], so K is an
+# integer in 16..32. Only ib_w is read; ib_h is ignored and the internal height
+# follows fb_h * K / 32. On the native 960x544 framebuffer:
+#   IB 960x544 -> K = 32, 960x544 (full resolution, the display is 1:1)
+#   IB 720x408 -> K = 24, 720x408 (the game's own internal size: every one of
+#                 the 22 @IB lines then re-writes its own original bytes)
+#   IB 640x368 -> K = 21, 630x357 (NOT 640x368 - K is truncated)
+#   IB 480x272 -> K = 16, 480x272 (half)
+# With @FB on as well the ratio is taken against fb_w, so FB 720x408 + IB
+# 960x544 clamps to K = 32 (720x408 rendered 1:1) and FB 720x408 + IB 480x272
+# renders 472x267. With @IB switched off the game keeps its own 0.75 whatever
+# @FB is set to, which is complete on its own: the low-res rectangle is then
+# 0.75 * fb.
+# The 22 @IB lines are the four viewport / region-clip scale sites (the shared
+# function 0xDE796 and its three inlined copies), the seven UvScaleBias literal
+# pools of the low-res sampling passes and the two NEON UvScaleBias writers.
+# There is nothing else: seg0 holds exactly fifteen 0x3F400000 words (fourteen
+# of them these seven pools, the fifteenth at 0xC24EC the (1.0, 0.75) UvScaleBias
+# of the unreachable function 0xC2314 - see the report) and no other
+# vmov.f32 #0.75 reaches a viewport, a region clip or a texture size.
+# Unlike FFX-2 there is no "boost" multiplier on the render scale: each of the
+# four scale sites does one vmul.f32 by s4 per component and nothing else
+# (0xDE7D4..0xDE7E0, 0xDEB04..0xDEB10, 0xDF342..0xDF34E, 0xE09FC..0xE0A08), so
+# there is no second multiply to cap at 1/S. (1.32f DOES exist in this module -
+# movw #0xF5C3 + movt #0x3FA8 at 0x3B8308/10, 0x3B8408/10 and 0x3BE28C/90 - but
+# all three sit in a tone-curve evaluator beside 0.061, 0.0015 and 1.47 and
+# never reach a viewport.) There are also no hard-coded tile-aligned halves of
+# the low-res rectangle - the only constant rectangles handed to the viewport /
+# region-clip emitters 0x44192 / 0x44232 are the five picture-in-picture
+# window clips of 0xC2748..0xC2806 (display coordinates of the config-sized
+# target, so they belong to @FB) and the 1280x720 movie and 960x960 / 512x512
+# shadow-map clips, which are not display-derived.
+#
+# SUB-PIXEL NOTE. The scale sites truncate (vcvt.u32.f32) while the UvScaleBias
+# carries the exact S, so the rendered rect and the sampled rect agree only when
+# fb * K / 32 is an integer. That holds for every fb on 960x544, 640x368 and
+# 480x272 and for FB 720x408 with IB 960x544 / 720x408 / 640x368; the single
+# exception is FB 720x408 + IB 480x272 (K = 21), which renders 472x267 but
+# samples 472.5x267.75 - up to one pixel of the composite edge reads
+# uninitialised target.
+#
+# complete option: its two lines change the DISPLAY render target only (the
+# config sample count and the display builder's depth row multiplier). The
+# off-screen PostProcessManager colour and depth buffers - the targets the scene
+# geometry is actually drawn into - carry their own hard-coded type byte 4
+# (movs r0, #4 at 0:0xDDEB0 and 0:0xDDF44), which this block does not touch, so
 # Offsets are for module NID 0x70F290D1 (ffx_phyreApp.self).
 
 [PCSE00293, ffx_phyreApp.self, 0x70F290D1]
 @FB
-# app ctor: movs.w r2, #960 / movs.w r1, #544 -> display config width / height (config +0 / +4)
+# app ctor: movs.w r2, #960 / movs.w r1, #544 -> display config width / height (config +0 / +4).
+# Everything else follows: display render target, the three display colour surfaces and their
+# memory, the depth surface, sceDisplaySetFrameBuf (pitch 1024 kept, >= every fb_w), the viewport
+# and region clip, the game's screen rectangles AND the off-screen PostProcessManager targets
 0:0x9A8DA t2_mov(1, 2, fb_w)
 0:0x9A8E2 t2_mov(1, 1, fb_h)
-# dialog path: movs.w r1, #960 / movs.w r0, #544 -> SceCommonDialogUpdateParam width / height (stride 1024 stays);
-# this function has no caller in this build, patched for consistency only
+# dialog path: movs.w r1, #960 / movs.w r0, #544 -> SceCommonDialogUpdateParam width / height
+# (stride 1024 stays); this function has no caller in this build, patched for consistency only
 0:0xF22D0 t2_mov(1, 1, fb_w)
 0:0xF22D8 t2_mov(1, 0, fb_h)
-@MSAA
-# app ctor: str.w r7, [r4, #684] stores the sample count (r7 = 4); source register -> r1 (= 1) / r0 (= 2) / r7 (= 4)
-0:0x9A90E uint16(0xF8C4) . uint16(0x02AC | (((0x701 >> (4 * msaa)) & 15) << 12))
-# display builder: str r4, [sp, #264] -> str r0, [sp, #264]: depth row multiplier 2 (r0) instead of the mode (r4 = 1 for 2x)
-0:0x943F2 uint16(0x9042)
+# --- picture-in-picture window region clips of the pass function at 0xC2732 (five placements
+# selected by [r4+0x54]); the full-screen restore right after each of them already uses the config
+# size (0xC2790 / 0xC2798 -> 0xC27A6). x/w scale with fb_w/960, y/h with fb_h/544. Arguments are
+# (r1 = x, r2 = y, r3 = w, [sp] = h), the h being built in r1 just before the str ---
+# rect (32, 352, 224, 160)
+0:0xC2748 t1_mov(1, fb_h*5/17)
+0:0xC274C t1_mov(1, fb_w/30)
+0:0xC274E t2_mov(1, 2, fb_h*11/17)
+0:0xC2752 t1_mov(3, fb_w*7/30)
+# rect (768, 96, 160, 160)
+0:0xC27B8 t1_mov(1, fb_h*5/17)
+0:0xC27BC t2_mov(1, 1, fb_w*4/5)
+0:0xC27C0 t1_mov(2, fb_h*3/17)
+0:0xC27C2 t1_mov(3, fb_w/6)
+# rect (704, 32, 224, 160): movs.w r1, #704 -> movw r1, #x (same 4 bytes; the MOVS.W flags are
+# dead - movs r2 / movs r3 set them again before the call and nothing reads them in between)
+0:0xC27CE t1_mov(1, fb_h*5/17)
+0:0xC27D2 t3_mov(1, 704*fb_w/960)
+0:0xC27D6 t1_mov(2, fb_h/17)
+0:0xC27D8 t1_mov(3, fb_w*7/30)
+# rect (704, 352, 224, 160)
+0:0xC27E4 t1_mov(1, fb_h*5/17)
+0:0xC27E8 t3_mov(1, 704*fb_w/960)
+0:0xC27EC t2_mov(1, 2, fb_h*11/17)
+0:0xC27F0 t1_mov(3, fb_w*7/30)
+# rect (32, 32, 224, 160)
+0:0xC27FC t1_mov(1, fb_h*5/17)
+0:0xC2800 t1_mov(1, fb_w/30)
+0:0xC2802 t1_mov(2, fb_h/17)
+0:0xC2804 t1_mov(3, fb_w*7/30)
+@IB
+# --- internal scale S = K / 32 with K = min(max(32*ib_w/fb_w,16),32); K = 24 reproduces the
+# game's own 0.75 byte for byte. Nothing here is shared with @FB or @MSAA ---
+# the low-res viewport / region-clip scale: vmov.f32 s4, #0.75 -> #S. The shared function 0xDE796
+# (19 callers) reads the last emitted rect from the command context (ctx+8..+0x14 = x, y, w, h),
+# multiplies all four by s4 and re-emits viewport (0x44192) + region clip (0x44232); 0xDEAF4,
+# 0xDF332 and 0xE09EC are its three inlined copies in the post-process pass functions. All four
+# are guarded by the low-resolution flag ppm+0x1425 (0xDE79C, 0xDEAC8, 0xDF306, 0xE09C0)
+0:0xDE7C4 t2_vmov(4, min(max(32*ib_w/fb_w,16),32)/32.0)
+0:0xDEAF4 t2_vmov(4, min(max(32*ib_w/fb_w,16),32)/32.0)
+0:0xDF332 t2_vmov(4, min(max(32*ib_w/fb_w,16),32)/32.0)
+0:0xE09EC t2_vmov(4, min(max(32*ib_w/fb_w,16),32)/32.0)
+# UvScaleBias literal pools (0.75, 0.75, 0, 0) of the seven low-res sampling passes -> (S, S, 0, 0).
+# Each is picked over the (1, 1, 0, 0) pool next to it only when the flag is set (flag read at 0xBA71E,
+# 0xBB03E, 0xDE9C4, 0xDF1DC, 0xE0888, 0x110034, 0x114FC2) and is copied into the fragment uniform
+# buffer; the z / w halves stay 0
+0:0xBA424 fl32(min(max(32*ib_w/fb_w,16),32)/32.0)
+0:0xBA428 fl32(min(max(32*ib_w/fb_w,16),32)/32.0)
+0:0xBB0DC fl32(min(max(32*ib_w/fb_w,16),32)/32.0)
+0:0xBB0E0 fl32(min(max(32*ib_w/fb_w,16),32)/32.0)
+0:0xDEA3C fl32(min(max(32*ib_w/fb_w,16),32)/32.0)
+0:0xDEA40 fl32(min(max(32*ib_w/fb_w,16),32)/32.0)
+0:0xDF26C fl32(min(max(32*ib_w/fb_w,16),32)/32.0)
+0:0xDF270 fl32(min(max(32*ib_w/fb_w,16),32)/32.0)
+0:0xE08F8 fl32(min(max(32*ib_w/fb_w,16),32)/32.0)
+0:0xE08FC fl32(min(max(32*ib_w/fb_w,16),32)/32.0)
+0:0x1100A4 fl32(min(max(32*ib_w/fb_w,16),32)/32.0)
+0:0x1100A8 fl32(min(max(32*ib_w/fb_w,16),32)/32.0)
+0:0x115034 fl32(min(max(32*ib_w/fb_w,16),32)/32.0)
+0:0x115038 fl32(min(max(32*ib_w/fb_w,16),32)/32.0)
+# the two NEON UvScaleBias writers (flag-guarded at 0x10280E / 0x10BF38): vmov.f32 q0, #0.75
+# overwrites x and y of the vector already in the uniform buffer while vorr d1, d3, d3 keeps z / w.
+# imm8 = 0x50 + K (0x60..0x70), written as one line per halfword for readability: imm3 = imm8 >> 4
+# in the first, imm4 = imm8 & 15 in the second (K < 32 -> imm3 = 6; K = 32 -> imm3 = 7, imm4 = 0,
+# i.e. 1.0). The combined `uint16(...) . uint16(...)` form is 106 characters and emits the same
+# four bytes; there is no limit on how often an expression may appear in a line
+0:0x102822 uint16(0xEF86+min(max(32*ib_w/fb_w,16),32)/32)
+0:0x102824 uint16(0x0F50+min(max(32*ib_w/fb_w,16),32)%16)
+0:0x10BF48 uint16(0xEF86+min(max(32*ib_w/fb_w,16),32)/32)
+0:0x10BF4A uint16(0x0F50+min(max(32*ib_w/fb_w,16),32)%16)
