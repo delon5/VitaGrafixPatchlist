@@ -6,15 +6,32 @@
 # targets; of the 36 sceGxmShaderPatcherCreateFragmentProgram sites, 32 pass mode 0 and
 # 4 are srlib's alternate 2x/4x variants of two programs (modes 1 and 2).
 #
-# @FB  lowers the display AND the render resolution: the map, menus and battle
-#      animations are drawn straight into the display buffers, so shrinking the
-#      render target / colour surface shrinks the whole scene.  All game geometry
-#      reaches the GPU already in clip space (the engine divides device pixels by the
-#      constant 960/544 and never queries the surface), so no UI, layout or scaler
-#      constant is touched - the picture scales as a whole, exactly as the engine's
-#      own off-screen views already render at 720x408 with the same geometry.
-#      It does NOT shrink the off-screen 1920x1088 effect atlas, which stays at stock
-#      size at every setting (see the report: part of the frame cost does not scale).
+# @FB  lowers the display resolution and the composite destination.  The scene itself
+#      is NOT drawn into the display buffers - it goes into a rect of the off-screen
+#      1920x1088 atlas (see @IB) and is blitted back by the composite quad, which
+#      reaches the GPU in NDC -1..+1 and therefore follows whatever surface is bound.
+#      All game geometry likewise reaches the GPU already in clip space (the engine
+#      divides device pixels by the constant 960/544 and never queries the surface),
+#      so no UI, layout or scaler constant is touched and the picture scales as a
+#      whole - but @FB lowers the display/composite cost only, not the scene's fill
+#      cost.  Use @IB for that.  The 1920x1088 atlas allocation itself stays at stock
+#      size at every @FB setting.
+# @IB  lowers the internal resolution: every frame is drawn into a rectangle of the
+#      off-screen 1920x1088 atlas (frame start 0:0x440CC -> 0:0x6588C -> bindTarget(0,
+#      force) at 0:0x658BE, sceGxmBeginScene at 0:0x61434, region clip/viewport from
+#      rect[k][0] at 0:0x658F2 -> 0:0x6114C) and the composite 0:0x65A56 ends that
+#      scene at 0:0x65AB0, begins the display scene at 0:0x65AFC and draws the atlas
+#      rect over an NDC -1..+1 quad, UVs from the same rect (0:0x60A0E).  Stock k = 1
+#      (1:0x5AE0 = 1, applied every frame at 0:0x440E0), i.e. 720x408 upscaled to
+#      960x544 already.  The block rewrites only the w/h halves of the rectangle
+#      table at seg1 0x7364 (8 quality rows x 4 rects x {x,y,w,h} f32); the quadrant
+#      origins {0,960} x {0,544} are untouched and min(ib_w,960)/min(ib_h,544) is the
+#      exact quadrant size, so no rect can leave its quadrant.  Each rect keeps its
+#      ratio to the largest of its own row.  Row 0 is reachable from the cross-fade /
+#      screen-capture helper 0:0x269094 (setQuality(0) at 0:0x2690E0, conditional on
+#      the display being the bound target), so below native a transition backdrop is
+#      captured at @IB size too.  Battle state 2 calls setRenderMode(-1) (0:0x120588)
+#      and draws to the display directly: that is NOT affected by @IB.
 # @MSAA gives the choice of 2x/4x on the display target and the one off-screen
 #      render-to-texture target.  All 36 sceGxmShaderPatcherCreateFragmentProgram
 #      sites are switched with it, including srlib's four alternate-slot programs, so
@@ -46,7 +63,6 @@
 #      it is a changed byte, not a restored one.  Leave @MSAA off to run stock.
 #
 # Known limitations / not shipped:
-# - @IB  not applicable: there is no scene buffer separate from the display buffer.
 # - @FPS not achieved: menus and map are already 60 FPS and frame-locked, battles are
 #        frame-locked at 30 with no timestep constant to patch.
 # - The dump contained no runtime records, so every value below was traced statically;
@@ -86,6 +102,47 @@
 # pair is INERT: patched only so the rect cannot go stale if that chain is ever live.
 0:0x4D3D8 t3_mov(2, (fb_w - 1))              # movw r2,#959 -> xMax = fb_w-1
 0:0x4D3DC t3_mov(3, (fb_h - 1))              # movw r3,#543 -> yMax = fb_h-1
+@IB
+# k = 0 row (stock main 960x544)
+1:0x736C fl32(min(ib_w, 960)) . fl32(min(ib_h, 544))                # rect 0 @(960,544) stock 960x544
+1:0x737C fl32(min(ib_w, 960)) . fl32(min(ib_h, 544))                # rect 1 @(0,0) stock 960x544
+1:0x738C fl32((min(ib_w, 960) / 2)) . fl32((min(ib_h, 544) / 2))    # rect 2 @(0,544) stock 480x272
+1:0x739C fl32(min(ib_w, 960)) . fl32(min(ib_h, 544))                # rect 3 @(960,0) stock 960x544
+# k = 1 row (stock main 720x408)
+1:0x73AC fl32(min(ib_w, 960)) . fl32(min(ib_h, 544))                # rect 0 @(960,544) stock 720x408
+1:0x73BC fl32(min(ib_w, 960)) . fl32(min(ib_h, 544))                # rect 1 @(0,0) stock 720x408
+1:0x73CC fl32((min(ib_w, 960) / 2)) . fl32((min(ib_h, 544) / 2))    # rect 2 @(0,544) stock 360x204
+1:0x73DC fl32(min(ib_w, 960)) . fl32(min(ib_h, 544))                # rect 3 @(960,0) stock 720x408
+# k = 2 row (stock main 640x368)
+1:0x73EC fl32(min(ib_w, 960)) . fl32(min(ib_h, 544))                # rect 0 @(960,544) stock 640x368
+1:0x73FC fl32(min(ib_w, 960)) . fl32(min(ib_h, 544))                # rect 1 @(0,0) stock 640x368
+1:0x740C fl32((min(ib_w, 960) / 2)) . fl32((min(ib_h, 544) / 2))    # rect 2 @(0,544) stock 320x184
+1:0x741C fl32(min(ib_w, 960)) . fl32(min(ib_h, 544))                # rect 3 @(960,0) stock 640x368
+# k = 3 row (stock main 480x272)
+1:0x742C fl32(min(ib_w, 960)) . fl32(min(ib_h, 544))                # rect 0 @(960,544) stock 480x272
+1:0x743C fl32(min(ib_w, 960)) . fl32(min(ib_h, 544))                # rect 1 @(0,0) stock 480x272
+1:0x744C fl32((min(ib_w, 960) / 2)) . fl32((min(ib_h, 544) / 2))    # rect 2 @(0,544) stock 240x136
+1:0x745C fl32(min(ib_w, 960)) . fl32(min(ib_h, 544))                # rect 3 @(960,0) stock 480x272
+# k = 4 row (stock main 360x204)
+1:0x746C fl32(min(ib_w, 960)) . fl32(min(ib_h, 544))                # rect 0 @(0,0) stock 360x204
+1:0x747C fl32(min(ib_w, 960)) . fl32(min(ib_h, 544))                # rect 1 @(960,0) stock 360x204
+1:0x748C fl32((min(ib_w, 960) / 2)) . fl32((min(ib_h, 544) / 2))    # rect 2 @(0,544) stock 180x102
+1:0x749C fl32(min(ib_w, 960)) . fl32(min(ib_h, 544))                # rect 3 @(960,544) stock 360x204
+# k = 5 row (stock main 960x544)
+1:0x74AC fl32(min(ib_w, 960)) . fl32(min(ib_h, 544))                # rect 0 @(960,544) stock 960x544
+1:0x74BC fl32(((min(ib_w, 960) * 2) / 3)) . fl32(((min(ib_h, 544) * 23) / 34))# rect 1 @(0,0) stock 640x368
+1:0x74CC fl32((min(ib_w, 960) / 2)) . fl32((min(ib_h, 544) / 2))    # rect 2 @(960,0) stock 480x272
+1:0x74DC fl32(min(ib_w, 960)) . fl32(min(ib_h, 544))                # rect 3 @(0,544) stock 960x544
+# k = 6 row (stock main 960x544)
+1:0x74EC fl32(min(ib_w, 960)) . fl32(min(ib_h, 544))                # rect 0 @(960,544) stock 960x544
+1:0x74FC fl32((min(ib_w, 960) / 2)) . fl32((min(ib_h, 544) / 2))    # rect 1 @(0,0) stock 480x272
+1:0x750C fl32((min(ib_w, 960) / 2)) . fl32((min(ib_h, 544) / 2))    # rect 2 @(960,0) stock 480x272
+1:0x751C fl32(min(ib_w, 960)) . fl32(min(ib_h, 544))                # rect 3 @(0,544) stock 960x544
+# k = 7 row (stock main 960x544)
+1:0x752C fl32(min(ib_w, 960)) . fl32(min(ib_h, 544))                # rect 0 @(960,544) stock 960x544
+1:0x753C fl32(((min(ib_w, 960) * 3) / 4)) . fl32(((min(ib_h, 544) * 3) / 4))# rect 1 @(0,0) stock 720x408
+1:0x754C fl32(((min(ib_w, 960) * 3) / 8)) . fl32(((min(ib_h, 544) * 3) / 8))# rect 2 @(0,544) stock 360x204
+1:0x755C fl32(((min(ib_w, 960) * 3) / 4)) . fl32(((min(ib_h, 544) * 3) / 4))# rect 3 @(960,0) stock 720x408
 @MSAA
 # display render target 0x4CB58: params.multisampleMode is stored from the zero register,
 # so the strh.w + the following add are re-encoded as three 16-bit instructions (6 bytes).
