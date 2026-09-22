@@ -21,7 +21,21 @@
 #      whichever slot srlib's selector picks the program matches the target: the
 #      module's only six sceGxmBeginScene sites (0:0x4D3D0, 0:0x61312, 0:0x61350,
 #      0:0x613F4, 0:0x61434, 0:0x65AFC) all bind a Kuro target, and both Kuro targets
-#      are switched here.  4x costs about +30 MiB of main RAM, 2x about +10 MiB.
+#      are switched here.
+#      MEMORY: the two depth buffers are the only allocations that grow - the
+#      1920x1088 atlas depth by +24.0 MiB at 4x and the display depth by +6.0 MiB,
+#      both out of the 256 MiB main partition.  A static budget of every
+#      sceKernelAllocMemBlock in the module puts it at 218.1 MiB at none, 228.0 at 2x
+#      and 248.0 at 4x, and neither the depth allocation nor sceGxmCreateRenderTarget
+#      checks its return value, so 8 MiB is not a margin to ship a never-tested
+#      setting on.  0:0x5E646 therefore moves the atlas depth into the video pool at
+#      2x and 4x: it rewrites the allocation type 0x0C208060 (USER_RW_UNCACHE) to
+#      0x09408060 (USER_CDRAM_RW), and the engine's own allocator wrapper 0:0x4C768
+#      already rounds CDRAM requests up to 256 KiB (0:0x4C792), so no size line
+#      changes and the free path is by memblock UID.  Main then reads 218.1 / 212.1 /
+#      216.1 MiB and the video pool 18.0 / 34.0 / 50.0 of 128.  It is a GPU-only
+#      surface, so CDRAM is the faster home for it in any case, and at "none" the
+#      line re-emits the stock bytes.
 #
 # NOT A NO-OP AT "none": @FB at 960x544 is byte-identical to the stock game, but @MSAA
 #      at "none" is NOT.  Four of its lines rewrite srlib's alternate-slot fragment
@@ -85,6 +99,7 @@
 0:0x4CCFA t2_mov(1, 3, 960 << (msaa / 2))    # movs.w r3,#960 -> depth strideInSamples
 # render-to-texture target (the 1920x1088 atlas), create() 0x5E594
 0:0x5E5F6 t1_mov(3, min(msaa, 1))            # movs r3,#0 -> RTT colour surface scaleMode
+0:0x5E646 t1_movt(0, (0xc20 - (min(msaa, 1) * 0x2e0)))  # atlas depth -> video pool
 0:0x5E64E uint16(9 | ((2 + msaa) << 6))      # lsls r1,r1,#2 -> #(2+msaa): RTT depth bytes
 0:0x5E666 uint16(43 | ((msaa / 2) << 6))     # adds r3,r5,#0 -> lsls r3,r5,#(msaa/2): depth stride
 0:0x5E6A6 t1_mov(2, msaa) . 4281r            # strh.w r6,[sp,#34] -> movs r2,#msaa ; strh r2,[r0,#10]

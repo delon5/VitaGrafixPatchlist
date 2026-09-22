@@ -15,7 +15,7 @@
 #            this build uses k = 1 (720x408) for the frame and k = 0 (960x544) for
 #            the screen-capture/cross-fade path. k is never any other value.
 #
-# What is in this file: 103 lines - 20 @FB, 32 @IB, 51 @MSAA. No @FPS section.
+# What is in this file: 104 lines - 20 @FB, 32 @IB, 52 @MSAA. No @FPS section.
 #
 # @FB   (960x544 / 720x408 / 640x368 / 480x272) moves the display buffers and
 #       everything stated in device pixels: sceDisplaySetFrameBuf, the display render
@@ -71,6 +71,20 @@
 #       are forced to the same mode, and srlib's depth allocation scales from the same
 #       patched fp, so srlib is self-consistent whether or not it ever runs.
 #       Nothing in the live Kuro display or atlas path changes value at none. See report.
+#       MEMORY: the two depth buffers are the only allocations that grow - the atlas
+#       depth by +24.0 MiB at 4x and the display depth by +6.0 MiB, both out of the
+#       256 MiB main partition, which a static budget of every sceKernelAllocMemBlock
+#       in the module puts at 218.3 MiB at none, 228.3 at 2x and 248.2 at 4x. Neither
+#       the depth allocation nor sceGxmCreateRenderTarget checks its return value, so
+#       8 MiB is not a margin to ship a never-tested setting on. 0:0x5F31E therefore
+#       moves the atlas depth into the video pool at 2x and 4x: it rewrites the
+#       allocation type 0x0C208060 (USER_RW_UNCACHE) to 0x09408060 (USER_CDRAM_RW),
+#       and the engine's own allocator wrapper 0:0x4D16C already rounds CDRAM requests
+#       up to 256 KiB, so no size line changes and the free path is by memblock UID.
+#       Main then reads 218.3 / 212.3 / 216.3 MiB and the video pool 19.5 / 35.5 /
+#       51.5 of 128 - note that 19.5 is a floor, because 22 call sites push
+#       runtime-sized textures into CDRAM as well. It is a GPU-only surface, so CDRAM
+#       is the faster home for it in any case, and at none the line is stock bytes.
 # @FPS is not provided. The pacing itself is patchable - g_vblank (1:0x7308) has ten
 #       writers, all immediates 1 or 2 - and the plugin does have the half-rate hook a
 #       60 FPS battle would need ('>rateDivide()'). What is missing is evidence, not a
@@ -240,6 +254,7 @@
 0:0x4D6FE t2_mov(1, 3, 960 * (1 + (msaa / 2)))   # movs.w r3, #960 -> depth strideInSamples (960/960/1920)
 # 1920x1088 off-screen atlas target 0x5F386
 0:0x5F2CE t1_mov(3, min(msaa, 1))  # movs r3, #0 -> sceGxmColorSurfaceInit scaleMode
+0:0x5F31E t1_movt(0, (0xc20 - (min(msaa, 1) * 0x2e0)))  # atlas depth -> video pool
 0:0x5F326 uint16(9 | ((2 + msaa) << 6))   # lsls r1, r1, #2 -> #2/#3/#4: depth bytes x1/x2/x4
 0:0x5F33E uint16(43 | ((msaa / 2) << 6))  # adds r3, r5, #0 -> lsls r3, r5, #0/#0/#1: stride in samples
 # params.multisampleMode again comes from a zero register: 12 bytes re-ordered in place
