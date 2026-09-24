@@ -59,7 +59,10 @@
 0:0x1219A t1_mov(0, min(vblank, 2))    # movs r0, #2 -> sceDisplayWaitVblankStartMultiCB after the flip (30)
 0:0x121A8 t1_mov(0, min(vblank, 2))    # movs r0, #1 -> same (60 mode)
 @MSAA
-# context constructor: rewrite the vtable store so the prologue also stores msaa into ctx+0x4C
-# (adds r4,r0 / movw r1,#0x9ff8 / movt r1,#0x811b / str r1,[r4] / movs r0,#msaa / str r0,[r4,#0x4c])
-0:0x11D56 uint16(0x1C04) . t3_mov(1, 0x9FF8) . t1_movt(1, 0x811B) . uint16(0x6021) . t1_mov(0, msaa) . uint16(0x64E0)
-0:0x11D80 nop                          # str r1, [r4, #0x4c] (msaa = 0) -> removed
+# context constructor 0x11D54 stores msaa into ctx+0x4C, which every render target reads. The vtable
+# address it loads first (movw r1,#0x9FF0 / movt r1,#0x811B at 0x11D56) is RELOCATED by the loader and
+# is left untouched: the +8 is folded into r1 instead, freeing two bytes. r6 is saved by the prologue
+# and never used in this function, so it carries msaa across the three calls to the zeroing store.
+# adds r4,r0,#0 ; adds r1,#8 ; str r1,[r4] ; movs r6,#msaa
+0:0x11D5E uint16(0x1C04) . uint16(0x3108) . uint16(0x6021) . t1_mov(6, msaa)
+0:0x11D80 uint16(0x64E6)               # str r1,[r4,#76] -> str r6,[r4,#76]
