@@ -65,10 +65,12 @@
 # Known limitations / not shipped:
 # - @FPS not achieved: menus and map are already 60 FPS and frame-locked, battles are
 #        frame-locked at 30 with no timestep constant to patch.
-# - The dump contained no runtime records, so every value below was traced statically;
-#   @MSAA in particular has never been run on hardware, and the display render target
-#   (0:0x4CB58) and the atlas (0:0x5E6AE) both ignore sceGxmCreateRenderTarget's return
-#   value, so a mode the driver refuses is a crash, not a fallback.  See the report.
+# - The dump contained no runtime records, so every value below was traced statically.
+#   @MSAA has since been run on hardware and boots and plays at 4x with the atlas-depth
+#   move (0:0x5E646) in place. @IB has not been run on this title; Super Robot Wars X's
+#   identical block has, at 960x544. The display render target (0:0x4CB58) and the atlas
+#   (0:0x5E6AE) both ignore sceGxmCreateRenderTarget's return value, so a mode the
+#   driver refuses is a crash, not a fallback.  See the report.
 
 [PCSH10001, eboot.bin, 0x373CE5C7]
 @FB
