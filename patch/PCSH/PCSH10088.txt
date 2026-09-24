@@ -13,36 +13,11 @@
 #            the composite is upscaled to the display. The rectangle used inside the
 #            atlas is picked from an 8-row table in seg1 by a "quality level" k;
 #            this build uses k = 1 (720x408) for the frame and k = 0 (960x544) for
-#            the screen-capture/cross-fade path. k is never any other value.
+#            the screen-capture/cross-fade path. setQuality(6) and setQuality(5) are
+#            also called (0:0x6FFEA, 0:0x6FFF2) from a caller whose reachability is
+#            not established; @IB rewrites all eight rows, so it holds for any k.
 #
-# What is in this file: 104 lines - 20 @FB, 32 @IB, 52 @MSAA. No @FPS section.
-#
-# @MSAA IS CLAMPED TO 2x. Selecting 4x in the configurator gives you 2x - every line
-#       below reads min(msaa, 1) rather than msaa, so 4x emits byte-for-byte the same
-#       104 patches as 2x (verified by diffing the interpreter's output at both
-#       settings). This is deliberate and it is not a silent downgrade of a working
-#       option: 4x was tested on hardware and the game hangs on the "loading
-#       application" screen before the first frame.
-#       Why clamp instead of not offering 4x: a patch file cannot restrict which
-#       levels are offered. src/patch.c sets g_patch_support[FEATURE_MSAA] on parsing
-#       this header and vg_config_apply_patch_capabilities can only disable the whole
-#       feature; there is no maximum-level field, and the configurator cycles
-#       off/2x/4x from the mere presence of an @MSAA block. Failing to parse at 4x is
-#       worse still - injections made before a parse error stay applied, which leaves
-#       a half-patched binary.
-#       Why 4x fails (static, and the reason it is not simply removed): the accounted
-#       main-memory total at 4x is ~235 MiB of 256 with the atlas depth already moved
-#       to the video pool by 0:0x5F31E, so capacity is not the constraint. What does
-#       scale x1/x2/x4 is the 32x32-sample tile grid across the display and atlas
-#       targets - 2,550 / 5,100 / 10,200 tiles - consumed out of the FIXED 16 MiB GXM
-#       parameter buffer at 0:0x4D30E (movs.w r1,#0x1000000 -> SceGxmInitializeParams
-#       +16, sceGxmInitialize at 0:0x4D316), which no line here scales. libgxm stalls
-#       on parameter-buffer exhaustion rather than returning an error, and the returns
-#       of both sceGxmInitialize and sceGxmCreateContext are discarded, so the symptom
-#       is a hang with nothing reported. Growing that buffer at 4x is one line and is
-#       being tested; when it is confirmed the clamp comes off.
-#       Note: Super Robot Wars V (PCSH10001) runs the same engine and is NOT clamped -
-#       4x is confirmed working there on hardware.
+# What is in this file: 52 lines - 20 @FB, 32 @IB. No @MSAA or @FPS section.
 #
 # @FB   (960x544 / 720x408 / 640x368 / 480x272) moves the display buffers and
 #       everything stated in device pixels: sceDisplaySetFrameBuf, the display render
@@ -71,51 +46,22 @@
 #       it is captured from. That is a policy choice, not a constraint - see the report.
 #       Known limit: the atlas stays 1920x1088, so an @IB above 960x544 is clamped to
 #       960x544 (a larger rectangle would leave its quadrant).
-# @MSAA gives the display target, the off-screen atlas and all 37 fragment programs one
-#       common multisample mode (capped at 2x, see above); the depth buffers and strides are scaled with it. All
-#       three paths must match or GXM faults, so the option is all-or-nothing.
-#       NOT a byte-identical no-op at msaa = none. Measured by applying the file at
-#       msaa = 0 and diffing every line against seg0.bin/seg1.bin: 18 of the 51 lines
-#       emit the stock bytes, 27 more emit the same value through a different encoding
-#       or a re-ordered block with the same end state, and SIX change behaviour, all
-#       six in srlib: 0:0x240B6, 0:0x240DE, 0:0x2413E and 0:0x24166 build srlib's
-#       per-mode fragment-program variants, which stock creates at modes 1 and 2, with
-#       the selected mode instead, and 0:0x25C38 / 0:0x25D94 force srlib's render-target
-#       and depth-surface mode arguments to the selected mode rather than the caller's.
-#       The 27 value-neutral ones: the 21 material sites and 0:0x5F33E re-encode a
-#       provably zero value; 0:0x4D53C, 0:0x5F376 and 0:0x63128 write the mode the field
-#       already held; 0:0x25E18 is inert below 4x (it sits behind the cmp.w fp, #2 at
-#       0:0x25E12); and 0:0x4D6AC is value-identical at none - note that this one is NOT
-#       srlib, it is the display-depth FALLBACK inside the live Kuro graphics init
-#       0:0x4D2AE, of which only the allocation-failure branch is untested.
-#       srlib is not PROVED unreachable, and this file no longer claims it is: its two
-#       ordinary entry points 0x81046F38 / 0x8104734A have 0 bl/blx and 0 address words,
-#       but the vtable at 0:0x605600 holds 0:0x1EC14 (slot 13) and 0:0x2455C (slot 18),
-#       both of which bl srlib's render-target creator 0:0x25BFE, and that vtable's vptr
-#       0x8162A830 IS built and stored by 0:0x20C08, 0:0x45DF4E, 0:0x45E686, 0:0x45E9CE
-#       and 0:0x46002E. Correctness does not depend on the answer: every render target,
-#       both live colour surfaces, both live depth surfaces and all 37 fragment programs
-#       are forced to the same mode, and srlib's depth allocation scales from the same
-#       patched fp, so srlib is self-consistent whether or not it ever runs.
-#       Nothing in the live Kuro display or atlas path changes value at none. See report.
-#       MEMORY: the two depth buffers are the only allocations that grow - the atlas
-#       depth by +24.0 MiB at 4x and the display depth by +6.0 MiB, both out of the
-#       256 MiB main partition, which a static budget of every sceKernelAllocMemBlock
-#       in the module puts at 218.3 MiB at none, 228.3 at 2x and 248.2 at 4x. Neither
-#       the depth allocation nor sceGxmCreateRenderTarget checks its return value, so
-#       8 MiB is not a margin to ship a never-tested setting on. 0:0x5F31E therefore
-#       moves the atlas depth into the video pool at 2x and 4x: it rewrites the
-#       allocation type 0x0C208060 (USER_RW_UNCACHE) to 0x09408060 (USER_CDRAM_RW),
-#       and the engine's own allocator wrapper 0:0x4D16C already rounds CDRAM requests
-#       up to 256 KiB, so no size line changes and the free path is by memblock UID.
-#       Main then reads 218.3 / 212.3 / 216.3 MiB and the video pool 19.5 / 35.5 /
-#       51.5 of 128 - note that 19.5 is a floor, because 22 call sites push
-#       runtime-sized textures into CDRAM as well. It is a GPU-only surface, so CDRAM
-#       is the faster home for it in any case, and at none the line is stock bytes.
+# @MSAA is not provided. It hangs on the "loading application" screen at BOTH 2x and 4x -
+#       tested on hardware - so it is withdrawn rather than clamped. (A clamp to 2x shipped
+#       briefly in 0ff4fc3 on the assumption that 2x worked; it does not.)
+#       It is not a memory problem. With both depth buffers moved to the video pool, graphics
+#       main memory is a flat 3 MiB at every setting and the game still hangs. Nor is it the
+#       engine: Super Robot Wars V (PCSH10001) runs the same engine and works at 4x.
+#       The block written for this title differed from V's in exactly three srlib lines -
+#       0:0x25C38 and 0:0x25D94 force srlib's render-target and depth-builder mode to the
+#       selected sample count (active at 2x and 4x), and 0:0x25E18 nops a 4x-only stride
+#       doubling. The code at all three sites is byte-identical in V, which leaves srlib
+#       unpatched and works. Those lines are the leading suspect and a build without them is
+#       under test. @MSAA returns to this file when a build boots on hardware.
 # @FPS is not provided. The pacing itself is patchable - g_vblank (1:0x7308) has ten
-#       writers, all immediates 1 or 2 - and the plugin does have the half-rate hook a
-#       60 FPS battle would need ('>rateDivide()'). What is missing is evidence, not a
-#       mechanism: menus and map are frame-locked at 60 and battles frame-locked at 30
+#       writers, all immediates 1 or 2 - but a 60 FPS battle would need a half-rate call
+#       hook, and the one prototyped for the Trails ports was withdrawn from the plugin.
+#       The evidence is missing too: menus and map are frame-locked at 60 and battles at 30
 #       with no timestep constant, so a cap halves logic speed and an unlock doubles it,
 #       and neither the demo step 0:0x11F0E8 nor the menu/map update was shown to
 #       tolerate being divided. See the report; the section is explicit about what is
@@ -185,8 +131,9 @@
 1:0x82C8 fl32(min(ib_w, 960)) . fl32(min(ib_h, 544))                 # rect 3 @(960,0)
 # k = 1 (720x408 row - the level this build renders the frame at; 1:0x6958 is written once,
 # 0:0x44920 str r0,[r1] from 0:0x36AB70 with movs r0,#1 at 0:0x36AB6E, and applied to
-# [AID_GLib+0x18] every frame at 0:0x4495E..0:0x44968). k is never any value but 0 or 1;
-# rows 2-7 below cannot be selected and are rewritten for consistency only.
+# [AID_GLib+0x18] every frame at 0:0x4495E..0:0x44968). Rows 5 and 6 are also selectable
+# (setQuality at 0:0x6FFEA / 0:0x6FFF2, reachability not established); every row is
+# rewritten with its ratios kept, so the block holds whichever k is live.
 1:0x82D8 fl32(min(ib_w, 960)) . fl32(min(ib_h, 544))                 # rect 0 @(960,544)
 1:0x82E8 fl32(min(ib_w, 960)) . fl32(min(ib_h, 544))                 # rect 1 @(0,0)
 1:0x82F8 fl32((min(ib_w, 960) / 2)) . fl32((min(ib_h, 544) / 2))     # rect 2 @(0,544), half res
@@ -221,82 +168,3 @@
 1:0x8468 fl32((min(ib_w, 960) * 3) / 4) . fl32((min(ib_h, 544) * 3) / 4)     # rect 1 @(0,0)
 1:0x8478 fl32((min(ib_w, 960) * 3) / 8) . fl32((min(ib_h, 544) * 3) / 8)     # rect 2 @(0,544)
 1:0x8488 fl32((min(ib_w, 960) * 3) / 4) . fl32((min(ib_h, 544) * 3) / 4)     # rect 3 @(960,0)
-
-@MSAA
-# srlib fragment programs: 2 output configs x 3 per-mode variants, all forced to one mode
-0:0x24088 t1_mov(3, min(msaa, 1))          # movs r3, #0 -> multisampleMode of variant [obj+0x1C]
-0:0x240B6 t1_mov(3, min(msaa, 1))          # movs r3, #1 -> variant [obj+0x20]
-0:0x240DE t1_mov(3, min(msaa, 1))          # movs r3, #2 -> variant [obj+0x24]
-0:0x24116 t1_mov(3, min(msaa, 1))          # movs r3, #0 -> variant [obj+0x28]
-0:0x2413E t1_mov(3, min(msaa, 1))          # movs r3, #1 -> variant [obj+0x2C]
-0:0x24166 t1_mov(3, min(msaa, 1))          # movs r3, #2 -> variant [obj+0x30]
-# Kuro built-in singleton fragment programs (immediate 0 at every site)
-0:0x4B75A t1_mov(3, min(msaa, 1))          # movs r3, #0 before blx sceGxmShaderPatcherCreateFragmentProgram
-0:0x4B826 t1_mov(3, min(msaa, 1))          # movs r3, #0 (same call, program 0x81707864)
-0:0x4B92C t1_mov(3, min(msaa, 1))          # movs r3, #0 (program 0x81707870)
-0:0x4C1F0 t1_mov(3, min(msaa, 1))          # movs r3, #0 (sprite object [r5+12])
-0:0x4D912 t1_mov(3, min(msaa, 1))          # movs r3, #0 (program 0x81707EC4, bound in the flip path)
-0:0x509EE t1_mov(3, min(msaa, 1))          # movs r3, #0 (2D program [r4+32])
-0:0x50A16 t1_mov(3, min(msaa, 1))          # movs r3, #0 (2D program [r4+36])
-0:0x50A3E t1_mov(3, min(msaa, 1))          # movs r3, #0 (2D program [r4+40])
-0:0x50A68 t1_mov(3, min(msaa, 1))          # movs r3, #0 (2D program [r4+44])
-0:0x50A90 t1_mov(3, min(msaa, 1))          # movs r3, #0 (2D program [r4+48])
-# Kuro material system: r3 comes from [material+0x354], which every writer sets to 0
-0:0x7084C t1_mov(3, min(msaa, 1))          # adds r3, r5, #0 (r5 = [lr+0x354]) -> movs r3, #msaa
-0:0x708A6 t3_mov(3, min(msaa, 1))          # ldr.w r3, [r8,#852] -> movw r3, #msaa
-0:0x71D0C t3_mov(3, min(msaa, 1))          # ldr.w r3, [r7,#852] -> movw r3, #msaa
-0:0x71E8A t3_mov(3, min(msaa, 1))          # ldr.w r3, [r7,#852] -> movw r3, #msaa
-0:0x71FF0 t3_mov(3, min(msaa, 1))          # ldr.w r3, [r7,#852] -> movw r3, #msaa
-0:0x72184 t3_mov(3, min(msaa, 1))          # ldr.w r3, [r7,#852] -> movw r3, #msaa
-0:0x722EE t3_mov(3, min(msaa, 1))          # ldr.w r3, [r7,#852] -> movw r3, #msaa
-0:0x724B2 t3_mov(3, min(msaa, 1))          # ldr.w r3, [r9,#852] -> movw r3, #msaa
-0:0x72604 t3_mov(3, min(msaa, 1))          # ldr.w r3, [r7,#852] -> movw r3, #msaa
-0:0x72788 t3_mov(3, min(msaa, 1))          # ldr.w r3, [r7,#852] -> movw r3, #msaa
-0:0x72950 t3_mov(3, min(msaa, 1))          # ldr.w r3, [r9,#852] -> movw r3, #msaa
-0:0x72ABE t3_mov(3, min(msaa, 1))          # ldr.w r3, [r7,#852] -> movw r3, #msaa
-0:0x72C2C t3_mov(3, min(msaa, 1))          # ldr.w r3, [r7,#852] -> movw r3, #msaa
-0:0x72DF2 t3_mov(3, min(msaa, 1))          # ldr.w r3, [r9,#852] -> movw r3, #msaa
-0:0x72FBA t3_mov(3, min(msaa, 1))          # ldr.w r3, [r9,#852] -> movw r3, #msaa
-0:0x73186 t3_mov(3, min(msaa, 1))          # ldr.w r3, [r9,#852] -> movw r3, #msaa
-0:0x7334C t3_mov(3, min(msaa, 1))          # ldr.w r3, [r9,#852] -> movw r3, #msaa
-0:0x73512 t3_mov(3, min(msaa, 1))          # ldr.w r3, [r9,#852] -> movw r3, #msaa
-0:0x73662 t3_mov(3, min(msaa, 1))          # ldr.w r3, [r7,#852] -> movw r3, #msaa
-0:0x73834 t3_mov(3, min(msaa, 1))          # ldr.w r3, [r9,#852] -> movw r3, #msaa
-0:0x73E70 t1_mov(3, min(msaa, 1))          # mov r3, ip (ip = [r0+0x354]) -> movs r3, #msaa
-# display render target 0x4D55C: params.multisampleMode comes from the zero register r6,
-# so the 24 bytes 0x4D53C..0x4D553 are re-ordered in place (same length, same end state:
-# r0 = sp+92, r1 = 0xC34C, [sp+100] = 1, [sp+102] = msaa, r2 = -1, r6 = 0)
-0:0x4D53C 0121 r . ADF86220 r . 5FF0FF32 r . ADF86410 r . 17A8 r . t1_mov(1, min(msaa, 1)) . 4181 r . 4CF24C31 r
-0:0x4D62A t1_mov(3, min(msaa, 1))  # movs r3, #0 -> sceGxmColorSurfaceInit scaleMode (MSAA downscale)
-0:0x4D694 t2_mov(1, 4, 2088960 << min(msaa, 1))   # movs.w r4, #0x1FE000 -> sceGxmMapMemory size of the depth buffer
-0:0x4D698 t2_mov(1, 2, 2088960 << min(msaa, 1))   # movs.w r2, #0x1FE000 -> depth alloc size, USER_RW_UNCACHE
-# depth fallback (taken only if the USER_RW_UNCACHE allocation above fails; it retries in
-# CDRAM - the movw/movt pair building 0x09408060 sits at 0:0x4D6AC/0:0x4D6B4 after this
-# line's re-order, 0:0x4D6AE/0:0x4D6B6 in stock; it is the type the rounding wrapper
-# 0:0x4D16C gives 256 KiB granularity at 0:0x4D186/0:0x4D192). The map size was re-read from
-# the vertex-ring-buffer constant at [sp+192]; the 20 bytes 0x4D6AC..0x4D6BF are re-ordered
-# so that it follows the (patched) allocation size instead. This block is in the LIVE
-# graphics init 0:0x4D2AE - only the branch it sits on (allocation failure) is untested.
-0:0x4D6AC 48F26001 r . C8F25810 r . C0F64011 r . t2_mov(1, 2, 2097152 << min(msaa, 1)) . 1446 r . 0023 r
-0:0x4D6FE t2_mov(1, 3, 960 * (1 + (min(msaa, 1) / 2)))   # movs.w r3, #960 -> depth strideInSamples (960/960/1920)
-# 1920x1088 off-screen atlas target 0x5F386
-0:0x5F2CE t1_mov(3, min(msaa, 1))  # movs r3, #0 -> sceGxmColorSurfaceInit scaleMode
-0:0x5F31E t1_movt(0, (0xc20 - (min(msaa, 1) * 0x2e0)))  # atlas depth -> video pool
-0:0x5F326 uint16(9 | ((2 + min(msaa, 1)) << 6))   # lsls r1, r1, #2 -> #2/#3/#4: depth bytes x1/x2/x4
-0:0x5F33E uint16(43 | ((min(msaa, 1) / 2) << 6))  # adds r3, r5, #0 -> lsls r3, r5, #0/#0/#1: stride in samples
-# params.multisampleMode again comes from a zero register: 12 bytes re-ordered in place
-0:0x5F376 ADF82070 r . t1_mov(7, min(msaa, 1)) . 4781 r . 14F19C01 r
-# the second 1920x1088 target 0:0x63132, in the unreferenced 0:0x630F4 (0 bl/blx, 0 address
-# word 0x81088324/25). Its mode is a hard-coded 0, so it would be a GPU mismatch at msaa != 0
-# if it ever ran; patched for the same reason the dead @FB sites are. The strh.w it replaces
-# is itself redundant (0:0x63106 strd r2,r2,[sp,#8] already zeroed [sp+14]); r0 = sp+4 from
-# 0:0x63126 and r1 is dead until 0:0x6312C, so 4 bytes hold movs r1,#msaa + strh r1,[r0,#10].
-0:0x63128 t1_mov(1, min(msaa, 1)) . 4181 r # strh.w r2,[sp,#14] -> movs r1,#msaa / strh r1,[r0,#10]
-# srlib render targets: one load feeds the target mode, [target+0x88] and the colour scaleMode
-# (these three override a caller-supplied argument even at msaa = 0. srlib's two ordinary
-#  entry points 0x81046F38/0x8104734A are unreferenced, but 0:0x25BFE is also reached from
-#  vtable 0:0x605600 slots 13/18 (0:0x1EC14, 0:0x2455C), whose vptr live code does install,
-#  so "never observed" is not proved; it is safe either way - see the report)
-0:0x25C38 t1_mov(4, min(msaa, 1))          # ldr r4, [r3,#20] (arg 10) -> movs r4, #msaa
-0:0x25D94 t3_mov(11, min(msaa, 1))         # ldr.w fp, [sp,#88] -> movw fp, #msaa: srlib's depth builder mode
-0:0x25E18 nop                      # lsls r3, r3, #1: srlib doubles the 4x stride once too often
