@@ -1,0 +1,127 @@
+# The Legend of Heroes: Sora no Kiseki SC Evolution [JP]
+#
+# Engine ed6sc_vita_Shipping (Chara-Ani "Hachi" engine, the same build family as Sora no
+# Kiseki FC Evolution PCSG00488 and Ao no Kiseki Evolution PCSG00246), module NID
+# 0x718BFB75. Offsets are seg0 offsets of that build (seg0 vaddr 0x81010DB0).
+#
+# @MSAA construction and why it needs a memory line:
+#  The engine has its own MSAA path - the display init fn 0x17B608 takes the mode as its r2
+#  parameter ([sp+0x50]) and sizes the display depth from it (0x1FE000 / 0x3FC000 / 0x7F8000
+#  bytes at stride 960/960/1920). Its only caller passes 0, so one line switches the whole
+#  display path. Every other site that carries a multisample mode is an immediate: the five
+#  sceGxmCreateRenderTarget params blocks, the four sceGxmColorSurfaceInit scaleMode operands
+#  that are not driven by that parameter, the two render-texture depth surfaces and the
+#  module's single sceGxmShaderPatcherCreateFragmentProgram. sceGxmColorSurfaceSetScaleMode
+#  is not imported, so nothing can override a scaleMode after the fact.
+#  This block also needs a memory line, for the reason established on FC. The engine takes
+#  three memblocks at boot and sub-allocates everything itself. GXM "heap 1" is one
+#  USER_RW_UNCACHE block of 14,680,064 bytes (movs.w r2,#0xE00000 at 0:0x82C4A), and the
+#  eight fixed boot allocations inside it already total 14,557,184 bytes - 99.16 % full,
+#  122,880 bytes spare - before multisampling is touched. Those eight are the GXM context
+#  and shader-patcher buffers (0x20000 + 0x200000 + 0x80000 + 0x4000 + 0x100000 + 0x40000 =
+#  4,079,616 at 0:0x188A0A..0:0x188AB8), the display depth (2,088,960) and an 8,388,608-byte
+#  frame scratch (0:0x17B96A). The display depth is one of them, so 2x needs 16,646,144
+#  bytes (1,966,080 short) and 4x needs 20,824,064 (6,144,000 short). The allocation that
+#  would return 0 is the frame scratch immediately after it (0:0x17B96A); its result is
+#  handed to four 2 MiB sub-arena constructors at 0x17B97A/0x17B98C/0x17B99E/0x17B9B0 with no
+#  NULL test, so the first GPU write would fault. 0:0x17B704 is the fix: it selects the heap
+#  the display depth comes from, and at 2x/4x it now picks heap 0 - the 96 MiB CDRAM arena
+#  (0x6000000, observed), whose identified fixed content is 12,386,510 bytes (1,114,112 at
+#  0:0xF6756, three 2,228,224-byte display buffers at 0:0x17B648, the 2,228,224-byte scene
+#  colour surface at 0:0x17B9FA = ldr [sl,#24] << 12 with 544 stored at 0x17B91E, the 131,072
+#  RTT depth, the 2,228,224 capture surface and 206 bytes of descriptors). With the display
+#  depth moved in and the RTT depth scaled, that is 16,695,502 at 2x and 21,135,566 at 4x of
+#  100,663,296 (21.0 %). The generic allocations through 0:0x17B5F0 (19 callers: textures,
+#  render-texture depths) are not bounded statically. Heap 1 then holds
+#  a constant 12,468,224 of 14,680,064 bytes (84.9 %) at every setting, with 2,211,840 spare,
+#  and the depth buffer ends up in the pool it belongs in: it is written per pixel per frame,
+#  so CDRAM is faster for it as well as safer. The free path picks the heap by testing the
+#  pointer against the CDRAM range (0x188EFC-0x188F08), so a one-sided heap change stays
+#  consistent. The arena is sub-allocated by the engine, not the kernel, so the 256 KiB CDRAM
+#  granularity does not apply and no size line is needed. At "none" the line re-emits the
+#  stock byte.
+#  NOTE: THIS TITLE HAS NOT BEEN TESTED ON HARDWARE AT ANY SETTING. What is established is
+#  the arithmetic above and the correspondence below. The identical FC block HAS been tested:
+#  PCSG00488 boots and runs at 4x with its 0:0x12D6F0 heap line in place - the setting that
+#  crashed before that line existed. Every site in this block was matched to FC's by
+#  disassembling both modules. Nineteen of the twenty replaced instructions are byte-identical
+#  to FC's apart from BL/BLX displacements and MOVW/MOVT literal halves. The twentieth is
+#  0:0x17D6D6: strh.w r8,[sp,#38] where FC has strh.w r5,[sp,#38], because this build zeroes
+#  the dormant target's multisampleMode from r8 rather than r5, and that window also differs
+#  in encoding (str.w/add.w where FC has str/add). It is replaced by a write of r2 to sp+36,
+#  which does not involve that register. The destination register and stack offset of every
+#  patched instruction agree with FC's, so the five raw-byte lines carry FC's bytes unchanged.
+#  That is a static argument, not a test.
+#
+[PCSG00489, eboot.bin, 0x718BFB75]
+@MSAA
+# display init fn 0x17B608, its only caller (0x17B95A): movs r2, #0 -> the engine's own MSAA
+# mode. Drives the display colour surface's scaleMode (lr = r2 != 0 at 0x17B6A0-0x17B6A6,
+# passed as r3 to the sceGxmColorSurfaceInit at 0x17B6D0) and the display depth surface's
+# memory and strideInSamples (0x17B6F2/0x17B6FA/0x17B6FE and 0x17B7A6/0x17B7B2, bytes =
+# r1 << 2 at 0x17B702; sceGxmDepthStencilSurfaceInit at 0x17B728, D16 format 0x02444000).
+0:0x17B958 t1_mov(2, msaa)
+# display depth surface heap selector (alloc(heap, align, size), fn 0x188E8E): movs r0,#1
+# picks GXM heap 1 (main, uncached, 14 MiB and 99.16 % full at native). At 2x/4x pick heap 0 -
+# the 96 MiB CDRAM arena - so the frame scratch that follows it in heap 1 still fits. Stock
+# byte at none. See header.
+0:0x17B704 t1_mov(0, (1 - min(msaa, 1)))
+# display render target (params at sp+28, sceGxmCreateRenderTarget at 0x17B784, driverMemBlock
+# -1 at 0x17B768/0x17B780 so GXM sizes the driver memory for the mode): movs.w r8, #1 at
+# 0x17B762 stays, the two halfword stores of scenesPerFrame [sp+36] and multisampleMode
+# [sp+38] become MOVT r8, #msaa plus a single str.w r8, [sp, #36] that writes 1 and msaa at
+# once. r8 is afterwards only read by the strb.w r8, [r5, #232] at 0x17B798, whose byte is the
+# unchanged low byte 1.
+0:0x17B778 t1_movt(8, msaa)
+0:0x17B77C CDF82480 r
+# the two scene render targets (one params block at sp+16, calls 0x17BA28 and 0x17BA34,
+# driverMemBlock -1): movs r0, #1 at 0x17BA00 stays; MOVT r0, #msaa, then the str.w has to
+# move past the movs.w r0, #-1, so the three 4-byte instructions are rotated: movt /
+# str.w r0,[sp,#24] / movs.w r0,#0xffffffff, which the strd r5, r0, [sp, #28] at 0x17BA22 then
+# consumes as before.
+0:0x17BA16 t1_movt(0, msaa)
+0:0x17BA1A CDF81800 r
+0:0x17BA1E 5FF0FF30 r
+# render-to-texture wrapper (params at sp+24, call 0x181FF6 - the 256x256, 128x128 and 960x544
+# targets of the dump, driverMemBlock -1 at 0x181FD2/0x181FF2): same MOVT + STR.W over
+# scenesPerFrame [sp+32] and multisampleMode [sp+34]; movs r2, #1 at 0x181FCE stays and r2 is
+# reloaded from [sp+52] at 0x182006 before its next use.
+0:0x181FEA t1_movt(2, msaa)
+0:0x181FEE CDF82020 r
+# every sceGxmColorSurfaceInit scaleMode in the module (movs r3, #0 -> SCE_GXM_COLOR_SURFACE_
+# SCALE_MSAA_DOWNSCALE when MSAA is on): the RTT surface (call 0x181FC6), the 1024x544 capture
+# surface (0x17CC20), the never-executed one at 0x17D070 and the dormant low-resolution one at
+# 0x17D6A6. The display surface's scaleMode comes from the engine parameter above, so it needs
+# no line here, and sceGxmColorSurfaceSetScaleMode is not imported.
+0:0x181FB6 t1_mov(3, min(msaa, 1))
+0:0x17CC1A t1_mov(3, min(msaa, 1))
+0:0x17D06E t1_mov(3, min(msaa, 1))
+0:0x17D6A4 t1_mov(3, min(msaa, 1))
+# dormant low-resolution render target (call 0x17D6DE): same MOVT + STR.W pair; movs r2, #1 at
+# 0x17D6AE stays, the multisampleMode store it replaces used r8 (= 0, movs.w r8,#0 at
+# 0x17D68A) which the strd r8, r5, [sp, #40] at 0x17D6DA still reads, and r2 is reloaded from
+# [sp+148] at 0x17D6EA. Patched only so the dormant path cannot disagree with the rest.
+0:0x17D6D2 t1_movt(2, msaa)
+0:0x17D6D6 CDF82420 r
+# render-to-texture depth surface (sceGxmDepthStencilSurfaceInit at 0x17BB58, format D16
+# 0x02444000): movs.w r2, #131072 is the allocation passed to 0x17BB34 (256*256*2 = the exact
+# D16 minimum) and movs.w r3, #256 is strideInSamples. 2x doubles the samples vertically
+# (memory x2, stride unchanged), 4x doubles both (memory x4, stride x2) - the same rule the
+# display path above applies natively.
+0:0x17BB30 t2_mov(1, 2, 131072 * pow(2, msaa))
+0:0x17BB54 t2_mov(1, 3, 256 * pow(2, max(msaa - 1, 0)))
+# generic render-texture depth surface (fn 0x15E4F6, call 0x15E6C6). Both parameters are
+# computed in registers but each has its own instruction: the allocation size is
+# lsls r1, r1, #1 at 0x15E6A4 over align(w,32)*align(h,32) (halfword 0x0049, imm5 at bits
+# 10:6), so #(1 + msaa) gives x2/x4; strideInSamples is the separate 16-bit adds r3, r4, #0 at
+# 0x15E6BC (0x1C23), four instructions after the mul at 0x15E68C and after the allocation call
+# at 0x15E6A8, so replacing it with lsls r3, r4, #1 (0x0063) doubles the stride for 4x only
+# and never touches r4 or the mul. r3's old value is dead (consumed by the bics.w r1, r3, #31
+# at 0x15E688), r4 is not read again, and no flags are consumed before the blx at 0x15E6C6.
+# At msaa 0 and 1 the line re-encodes the original bytes.
+0:0x15E6A4 uint16(0x0049 + (msaa << 6))
+0:0x15E6BC uint16(0x1C23 - (0x1BC0 * (msaa >> 1)))
+# the module's only sceGxmShaderPatcherCreateFragmentProgram (call 0x186EF0, wrapper 0x186E44
+# with 9 callers): movs r3, #0 -> msaa, so every fragment program in the process carries the
+# same multisampleMode as every render target.
+0:0x186EEE t1_mov(3, msaa)
