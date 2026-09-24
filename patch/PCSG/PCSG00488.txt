@@ -108,7 +108,7 @@
 0:0x12D944 t1_mov(2, msaa)
 # display depth surface heap selector (alloc(heap, align, size), fn 0x13B37A): movs r0,#1 picks GXM
 # heap 1 (main, uncached, 14 MiB and 99.16 % full at native). At 2x/4x pick heap 0 - the 96 MiB CDRAM
-# arena - so the four allocations that follow it in heap 1 still fit. Stock byte at none. See header.
+# arena - so the 8 MiB frame scratch allocated after it in heap 1 still fits. Stock byte at none.
 0:0x12D6F0 t1_mov(0, (1 - min(msaa, 1)))
 # display render target (params at sp+28, sceGxmCreateRenderTarget at 0x12D770, driverMemBlock -1 at
 # 0x12D754/0x12D76C so GXM sizes the driver memory for the mode): movs.w r8, #1 at 0x12D74E stays, the
@@ -147,7 +147,7 @@
 # 4x doubles both (memory x4, stride x2) - the same rule the display path above applies natively.
 0:0x12DB2A t2_mov(1, 2, 131072 * pow(2, msaa))
 0:0x12DB4E t2_mov(1, 3, 256 * pow(2, max(msaa - 1, 0)))
-# generic render-texture depth surface (fn 0x111922, call 0x111AF2, callers 0x12DCA6/0x13828A/0x138504).
+# generic render-texture depth surface (fn 0x111922, call 0x111AF2, callers 0x12DCA6/0x137C8A/0x137F04).
 # Both parameters are computed in registers but each has its own instruction: the allocation size is
 # lsls r1, r1, #1 at 0x111AD0 over align(w,32)*align(h,32) (halfword 0x0049, imm5 at bits 10:6), so
 # #(1 + msaa) gives x2/x4; strideInSamples is the separate 16-bit adds r3, r4, #0 at 0x111AE8 (0x1C23),
