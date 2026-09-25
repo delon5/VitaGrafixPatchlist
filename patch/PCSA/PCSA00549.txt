@@ -1,0 +1,200 @@
+# LittleBigPlanet PS Vita - Marvel Super Hero Edition [US]
+#
+# LBP2 engine port (module "LBP2_Final"). Everything is in the main module.
+#
+# Native state (static analysis plus GXM traces of this build on hardware):
+#   display  960x544 (rt#3), two colour buffers, pitch align(w,64), tiled S8D24 display depth
+#            placed in the scene depth block; 30 FPS (sceDisplayWaitSetFrameBufMulti(2), 0:0x3923EC).
+#   scene    rt#1 720x408, MSAA 4x, 2 scenes per frame: color#1 = scene resolve (stride 736),
+#            color#2 = post-process composite, depth#0 D16 (stride 1472). The final composite
+#            (fn 0x3A7524) draws a -1..1 quad with UV 0..1 onto the display, and the scene uses the
+#            sceGxmBeginScene default viewport/clip, so the scene size can change freely.
+#            The engine ALSO keeps the render size in two const ints, 0:0x7CA1A0 = 720 and
+#            0:0x7DC28C = 408, which the post-process manager (object 0x81B949D0) reads.
+#   effects  rt#7 768x1024 is an atlas of the half-resolution particle / gas / DOF / bloom buffers
+#            (PRT_*_BUFFER_HALF): W/2 x H regions at column A = align(W/2,128) and row
+#            B = align(H,128), below a fixed 96-row margin and beside fixed bloom and sprite-light
+#            tiles at x 0..383, rows 96..479.
+#   rt#2     352x408 4x "MainCapture" (photos), fixed size, borrows color#1's and depth#0's memory.
+#
+# What is in this file: 51 lines - 2 @FB, 15 @IB, 11 @MSAA, then 23 shader lines in a second @IB
+# block (20 gxp, 3 gxplit). No @FPS section.
+#
+# @FB   (960x544 / 720x408 / 640x368 / 480x272) changes the defaults of the engine settings
+#       "xres"/"yres" (fn 0x38F3D4). Every display object is built from them: both display
+#       buffers, the display depth, rt#3/rt#4/rt#5, colour surfaces #6/#9, the capture textures,
+#       both sceDisplaySetFrameBuf sites (size from the display context, pitch from the surface)
+#       and the sceCommonDialogUpdate size. UI and touch use a fixed 1280x720 canvas, the
+#       composite is NDC, and no viewport or clip is ever set on the display. The settings map
+#       that could override the defaults has no writer in the eboot. Byte-identical at 960x544.
+#       Side effect: photo framing follows the display aspect (0.575 at 640x368, 0.567 native).
+# @IB   renders the 3D scene at ib, capped at 960x544, and moves the effect buffers with it.
+#       ISSUE #24 FIX (particles break when enemies are killed, e.g. level 2.1; "horrible gas"
+#       stuck at the default resolution; slight top-left offsets at in-between sizes): the old
+#       8-line patch (the lines at 0:0x1685xx) resized rt#1 and its surfaces but not the two
+#       const ints. The half-res effect buffers therefore stayed 360x204 while the scene became
+#       960x544, and the effect shaders, which read them at pixel/2, lined up only in the
+#       top-left 720x408 and read neighbouring atlas memory everywhere else (in the issue's
+#       screenshots the gas ends at exactly 0.75 x 0.75 of the screen and the garbage starts at
+#       row ~408). Writing ib into the two words makes the atlas, the half-res buffers, their
+#       views, viewports and clips, the post-process half-texel offsets 0.5/W, 0.5/H and the
+#       in-scene line-width scale follow the scene. Two more lines keep the atlas layout valid:
+#       it needs A >= 384 and B >= max(480, H + 96), which align(.,128) met only at 720x408 and
+#       960x544 by luck (864x492, 640x368 or 544x308 would overlap the tiles or overrun).
+#       0:0x3A8A48 keeps the depth#0 block at least at its stock size: the display depth,
+#       depth#1, the 768x768 depth and color#9 all reuse it, so an ib below native (or @MSAA
+#       below 4x) would otherwise overrun the display buffer allocated right after it.
+#       The object photo capture also reads the two words; it is pinned to 720x408 so saved
+#       stickers stay 360x204 at every ib.
+#       Range: ib above 960x544 is capped to 960x544 in every line (memory grows sharply above
+#       it and the display is 960x544). Recommended minimum 544x308: below
+#       align(w,32)*align(h,32) = 143,616 the fixed 352x408 MainCapture colour runs past
+#       color#1's memory into color#2 while a photo is taken (21,504 B at 480x272, about 15 rows
+#       of that photo or 11 rows of one frame; GPU surfaces only). 480x272 runs, but not cleanly.
+#       MEMORY: at 960x544 the 95 MB CDRAM heap holds 5,373,952 B more than stock (colour x2
+#       +1,728,512, depth block +1,744,896, atlas +1,900,544; the old patch added 3,457,024).
+#       Its free space cannot be measured statically. At ib 720x408 every line gives the stock
+#       result, except the depth block (2,457,600 B, +8 KiB).
+#       SHADERS (second @IB block, needs a VitaGrafix build that knows gxp: lines): ten fragment
+#       programs in the game data compute a screen UV as gl_FragCoord * (1/720, 1/408) with the
+#       stock size compiled in. Confirmed on hardware: with only the eboot lines, particle bursts
+#       (sticker/key pickups, enemy deaths) still broke at every ib above 720x408, 768x432
+#       included. The shader lines rewrite those literals when the game registers each program:
+#       four PostDoF composites (the smoke/fire and particle passes) and six main-scene materials
+#       that refract the colour buffer. Each line names the program by the FNV-1a of its GXP and
+#       is checked against the stock bytes first, so a program whose bytes differ is left alone.
+#       The three gxplit rules catch permutations of the same shaders the capture did not see:
+#       they match the (1/720, 1/408) pair by value in consecutive literal registers of any
+#       program no gxp line names, and the log names every program they touch. One more line
+#       (BA5708B2, touch ripple, medium confidence) scales 0.56, which maps the 1280x720 touch
+#       canvas to render pixels; if the ripple moves away from the finger, remove that line.
+#       Left alone on purpose: the 1280x720 UI canvas (1/720 with 1/1280), a fixed 640x360 blur
+#       and the heat-haze/composite tap offsets. Tested on hardware at ib 960x544 (FB 960x544,
+#       MSAA 4x): with the shader lines the sticker and key pickup bursts render correctly; the
+#       touch ripple line is not confirmed yet. An older VitaGrafix stops at the first gxp line
+#       with an error message, after applying every line above it.
+# @MSAA (none / 2x / 4x; stock 4x) sets the mode of the two MSAA groups, rt#1 (scene) and rt#2
+#       (MainCapture), and of every fragment program. At 4x every line emits the stock bytes.
+#       One register per group feeds the render target and its colour and depth surfaces
+#       (r6 at 0:0x16853A, r4 at 0:0x16865E). The engine flag [rt+4] only means "this is the
+#       MSAA world scene" (program-table choice, line width) and stays non-zero; at none only
+#       the four values that reach GXM drop to 0 (4 lines: RT params, colour scaleMode, depth#0
+#       and depth#1 mode), and the one fragment-program create site maps every mode through
+#       usat r3,#msaa,fp (2 -> 0/1/2). At 2x the depth texture becomes w x 2h (samples stacked
+#       in Y). The depth#0 block keeps its stock 4x size in every mode (0:0x3A8A00; when @IB is
+#       on, 0:0x3A8A48 replaces the multiply and 0:0x3A8A00 has no effect).
+#       Five lines sit in shared functions: RT 0x3A8478 (0:0x3A84A2), colour 0x3A8524
+#       (0:0x3A8578) and depth 0x3A89AE (0:0x3A8A00, 0:0x3A8A9C, 0:0x3A8AA2). They are correct
+#       because every other render target and colour surface is mode 0, only depth#0 reaches the
+#       depth allocation (0x3A8B1E, one caller) and only depth#0/#1 pass mode 1.
+#       Not tested on hardware. 2x relies on GXM storing 2x samples 1x2 (the game's own mode-1
+#       stride code and vitaGL agree). Issue #24 is not an MSAA problem: rt#7 is mode 0.
+# @FPS is not provided. The simulation steps exactly once per rendered frame: the main loop
+#       (0:0x6A14) has no clock, one input frame is queued per iteration (0:0x64F4 -> 0x318A1C)
+#       and the lockstep stepper 0x50A0 runs one world step (0x182890, no dt) per input frame.
+#       Timers count 30 Hz frames (GameFrame/SimFrame wrap at 48 h x 3600 x 30), and so do the
+#       level scripts and user levels, which are not in the eboot. The vsync divider
+#       (0:0x3923EA movs r0,#2) patches cleanly, but at 60 the game runs at up to 2x speed and
+#       dialogue is cut (patchlist issue #37), and at 20 it runs at 2/3 speed. A real 60 FPS
+#       needs a clock-driven 30 Hz step plus render interpolation that the engine does not keep;
+#       the plugin has no hook for that.
+#
+# Offsets are for module NID 0x91ABDB4F only.
+
+[PCSA00549, eboot.bin, 0x91ABDB4F]
+@FB
+# fn 0x38F3D4: defaults of the engine settings "xres"/"yres", stored to 0x81B71134 / 0x81B71138
+0:0x38F3EA t2_mov(1, 7, fb_w)   # movs.w r7, #960 -> xres (flags dead: bl follows)
+0:0x38F40A t2_mov(1, 6, fb_h)   # movs.w r6, #544 -> yres (flags dead: bl follows)
+
+@IB
+# render setup 0x1684EE: rt#1 and its surfaces (the old 8 lines, now capped at 960x544). The
+# wrappers derive stride, memory and texture views from w/h; RT driver memory follows by itself.
+0:0x168546 t2_mov(1, 1, min(ib_w, 960))   # movs.w r1, #720 -> rt#1 width (0x813A8478)
+0:0x16854A t2_mov(1, 2, min(ib_h, 544))   # movs.w r2, #408 -> rt#1 height
+0:0x16856A t2_mov(1, 1, min(ib_w, 960))   # movs.w r1, #720 -> color#1 (scene resolve) width
+0:0x16856E t2_mov(1, 2, min(ib_h, 544))   # movs.w r2, #408 -> color#1 height
+0:0x168582 t2_mov(1, 1, min(ib_w, 960))   # movs.w r1, #720 -> color#2 (post-process composite) width
+0:0x16858A t2_mov(1, 2, min(ib_h, 544))   # movs.w r2, #408 -> color#2 height
+0:0x1685B0 t2_mov(1, 1, min(ib_w, 960))   # movs.w r1, #720 -> depth#0 D16 width (0x813A8B1E)
+0:0x1685B4 t2_mov(1, 2, min(ib_h, 544))   # movs.w r2, #408 -> depth#0 height
+# issue #24: the render size as the rest of the engine reads it. Plain rodata words, not
+# relocated; only readers are movw/movt pairs: width 0x3A6062 (atlas), 0x3A6A12 (0.5/W),
+# 0x192010/0x192052 (line width W/1280), 0x3E55F8 (capture); height 0x3A6070, 0x3A6A1C, 0x3E55FC.
+# H stays even (ib is already a multiple of 4): three half-res views start at byte A*(8B+4H).
+0:0x7CA1A0 uint32(min(ib_w, 960))           # int 720 -> render width W
+0:0x7DC28C uint32(min(ib_h, 544) / 2 * 2)   # int 408 -> render height H
+# atlas rt#7 (fn 0x3A5CB4): A = (W/2 + imm) & ~127, B = (H + imm) & ~127, RT 2A x 2B via ubfx.
+# A = max(384, align(W/2,128)), B = max(512, align(H+96,128)): stock 384/512 at 720x408 and
+# 512/640 at 960x544. min(255) keeps the imm8 out of the register field.
+# adds r0, #127 -> adds r0, #(A - W/2)
+0:0x3A609C uint16(0x3000 | min(255, max(384, align(min(ib_w, 960) / 2, 128)) - min(ib_w, 960) / 2))
+# adds r1, #127 -> adds r1, #(B - H)
+0:0x3A60AC uint16(0x3100 | min(255, max(512, align(min(ib_h, 544) / 2 * 2 + 96, 128)) - min(ib_h, 544) / 2 * 2))
+# depth#0 block (depth wrapper 0x3A89AE; only depth#0 allocates). Reused by the display depth,
+# depth#1, the 768x768 depth and color#9 (largest 2,359,296 B), so it never drops below stock.
+# mul.w r1, r3, r2 -> mov.w r1, #max(4x size, 2449408) rounded up to 32 KiB (always encodable)
+0:0x3A8A48 t2_mov(0, 1, align(max(8 * align(min(ib_w, 960), 32) * align(min(ib_h, 544), 32), 2449408), 32768))
+# object photo capture (fn 0x3E55B6, "poppet/photograph_object"): its own W/2 x H/2 render is
+# DXT-encoded and saved as a sticker. Kept at the stock 360x204 so saved content does not change.
+0:0x3E560C t3_mov(0, 720)   # add.w r0, r0, r0, lsr #31 -> movw r0, #720 (asrs -> 360)
+0:0x3E5610 t3_mov(1, 408)   # add.w r1, r1, r1, lsr #31 -> movw r1, #408 (asrs -> 204)
+
+@MSAA
+# rt#1 group: movs r6,#2 -> 2 at none/4x, 1 at 2x (RT [sp], colour [sp+8] x2, depth [sp+4])
+0:0x16853A t1_mov(6, 2 - (msaa % 2))
+# rt#2 group: movs r4,#2 -> 2 at none/4x, 1 at 2x (RT [sp], colour [sp+12], depth [sp+8])
+0:0x16865E t1_mov(4, 2 - (msaa % 2))
+# RT wrapper: strh.w r2,[sp,#14] (params.multisampleMode) -> strh.w r5,[sp,#14] (r5 = 0) at none
+0:0x3A84A2 uint16(0x500E - (0x3000 * min(msaa, 1)))
+# colour surface fn: movs r0,#1 (scaleMode = MSAA downscale when mode != 0) -> #0 at none
+0:0x3A8578 t1_mov(0, min(msaa, 1))
+# depth#0 mode arg: strd r4,r6,[sp] -> strd r4,r4,[sp] at none (r4 = 0)
+0:0x16859A uint16(0x4400 + (0x0200 * min(msaa, 1)))
+# depth#1 mode arg: strd r4,r6,[sp,#8] -> strd r6,r6,[sp,#8] at none (r6 = 0)
+0:0x1686BC uint16(0x6602 - (0x2000 * min(msaa, 1)))
+# fragment programs (one create site, 58 callers via 0x39106E): strd r2,r3,[sp] ->
+# stmia.w sp,{r2,r3,r4} at none/2x, which takes over the str r4,[sp,#8] below
+0:0x3910F4 uint16(0xE88D + (0x0140 * (msaa / 2))) . uint16(0x001C + (0x22E4 * (msaa / 2)))
+# str r4,[sp,#8] ; mov r3,fp -> usat r3,#msaa,fp (multisampleMode = min(mode, 2^msaa - 1))
+0:0x3910FA uint16(0xF38B - (0x5F89 * (msaa / 2))) . uint16(0x0300 + msaa + (0x4359 * (msaa / 2)))
+# depth texture at 2x (samples in Y only): cmp r0,#2 -> #1, lsl r9,#1 -> #0 (width x1, height x2)
+0:0x3A8A9C uint16(0x2802 - (msaa % 2))
+0:0x3A8AA2 uint16(0x0949 - (0x40 * (msaa % 2)))
+# depth#0 block stays at the stock 4x size 2,449,408 B at every mode (shared, see @IB):
+# bne.n (skip the 2x size) -> nop, lsls r2,#1 -> #2 (size x4 whatever the mode)
+0:0x3A8A00 uint16(0xBF00 + (0x1200 * (msaa / 2))) . uint16(0x0092 - (0x0040 * (msaa / 2)))
+
+@IB
+# Shader literals (second @IB block, so an older VitaGrafix still applies every line above).
+# W = min(ib_w, 960), H = min(ib_h, 544): the size of the render target the eboot lines create.
+# Each program computes uv = gl_FragCoord.xy * (1/720, 1/408). Offsets are inside the GXP.
+# PostDoF composites: 842CD7E0/CEDDB385/ABC51E1D hold 1/720 as a half widened to f32,
+# 0350976F (smoke/fire) holds (1/720, 1/408) as a packed pair of halves.
+gxp:842CD7E0:0x1C4 fl32(half(1.0/720)) => fl32(half(1.0/min(ib_w, 960)))
+gxp:842CD7E0:0x1CC fl32(1.0/408) => fl32(1.0/min(ib_h, 544))
+gxp:CEDDB385:0x1C4 fl32(half(1.0/720)) => fl32(half(1.0/min(ib_w, 960)))
+gxp:CEDDB385:0x1CC fl32(1.0/408) => fl32(1.0/min(ib_h, 544))
+gxp:0350976F:0x324 fl16(1.0/720).fl16(1.0/408) => fl16(1.0/min(ib_w, 960)).fl16(1.0/min(ib_h, 544))
+gxp:ABC51E1D:0x250 fl32(half(1.0/720)) => fl32(half(1.0/min(ib_w, 960)))
+gxp:ABC51E1D:0x258 fl32(1.0/408) => fl32(1.0/min(ib_h, 544))
+# Main-scene materials that refract the colour buffer (cbuf, texture unit 15)
+gxp:0C30ACBB:0x298 fl32(1.0/720) => fl32(1.0/min(ib_w, 960))
+gxp:0C30ACBB:0x2A0 fl32(1.0/408) => fl32(1.0/min(ib_h, 544))
+gxp:28EA0046:0x2B8 fl32(1.0/720) => fl32(1.0/min(ib_w, 960))
+gxp:28EA0046:0x2C0 fl32(1.0/408) => fl32(1.0/min(ib_h, 544))
+gxp:6369657B:0x2F0 fl32(1.0/720) => fl32(1.0/min(ib_w, 960))
+gxp:6369657B:0x2F8 fl32(1.0/408) => fl32(1.0/min(ib_h, 544))
+gxp:924AAAC6:0x260 fl32(1.0/720) => fl32(1.0/min(ib_w, 960))
+gxp:924AAAC6:0x268 fl32(1.0/408) => fl32(1.0/min(ib_h, 544))
+gxp:98D34068:0x300 fl32(1.0/720) => fl32(1.0/min(ib_w, 960))
+gxp:98D34068:0x308 fl32(1.0/408) => fl32(1.0/min(ib_h, 544))
+gxp:E6E1B555:0x328 fl32(1.0/720) => fl32(1.0/min(ib_w, 960))
+gxp:E6E1B555:0x330 fl32(1.0/408) => fl32(1.0/min(ib_h, 544))
+# Other permutations of the same shaders: the same three literal forms, matched by value in
+# consecutive literal registers of any program not listed above
+gxplit: fl32(1.0/720).fl32(1.0/408) => fl32(1.0/min(ib_w, 960)).fl32(1.0/min(ib_h, 544))
+gxplit: fl32(half(1.0/720)).fl32(1.0/408) => fl32(half(1.0/min(ib_w, 960))).fl32(1.0/min(ib_h, 544))
+gxplit: fl16(1.0/720).fl16(1.0/408) => fl16(1.0/min(ib_w, 960)).fl16(1.0/min(ib_h, 544))
+# Touch ripple (medium confidence): 0.56 maps the 1280x720 touch canvas to 720x408 render pixels
+gxp:BA5708B2:0x3B0 fl32(0.56) => fl32(0.56 * (min(ib_w, 960) / 720.0))
