@@ -73,3 +73,11 @@
 0:0x6A434 uint16(0x1C1D | (((fb_h - fb_w * 9 / 16) / 2) << 6))
 0:0x6A464 uint16(0xF10B) . uint16(0x0B00 | ((fb_h - fb_w * 9 / 16) / 2))
 0:0x6A522 uint16(0x1C06 | (((fb_h - fb_w * 9 / 16) / 2) << 6))
+
+# off-screen layer target (fn 0xA56E0: colour surface, render target and texture of a layer drawn with
+# partial alpha or a shader): window size -> device size with the same fb_w / 1280 scale as set_viewport
+# (natively w/2, h/2): add.w rD, rN, rN, lsr #31 -> lsl #k and asrs rD, rD, #1 -> #m
+0:0xA56F4 uint16(0xEB01) . uint16(0x0501 | ((((0x3011 >> (4 * ((fb_w / 80 - 6) % 5))) & 15)) << 6))
+0:0xA56F8 uint16(0xEB02) . uint16(0x0402 | ((((0x3011 >> (4 * ((fb_w / 80 - 6) % 5))) & 15)) << 6))
+0:0xA56FC uint16(0x102D | ((((0x4223 >> (4 * ((fb_w / 80 - 6) % 5))) & 15)) << 6))
+0:0xA56FE uint16(0x1024 | ((((0x4223 >> (4 * ((fb_w / 80 - 6) % 5))) & 15)) << 6))
