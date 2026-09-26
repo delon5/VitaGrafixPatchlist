@@ -1,0 +1,52 @@
+# Zero Escape: The Nonary Games [US]
+#
+# Spike Chunsoft "skp" engine (module skp_vita) on Sony's SampleUtil graphics layer
+# (sce::SampleUtil::Graphics, memory heaps named "SampleGraphUtil"). This eboot is the
+# launcher and 999 (Zero Escape Vol. 1). Virtue's Last Reward is a separate executable,
+# app0:skp2_psp2.self, started with sceAppMgrLoadExec (0:0x9AAE); it is a different module
+# and is NOT covered by this section.
+#
+# Rendering: the scene is drawn straight into the display buffers. SampleUtil's display
+# builder (0:0x2B38C) makes three 960x544 linear A8B8G8R8 colour buffers, one render target
+# each, and one 960x544 tiled DF32 (32-bit float, no stencil) depth buffer, all from the
+# growable 32 MiB CDRAM heap; there is no off-screen scene target, so @IB does not apply.
+# Every fragment program is built in all three multisample modes (0:0x2D546..0:0x2D612), and
+# the variant bound is picked from the current render target's output register size and
+# multisample mode (0:0x2A2CE), so the bound variant follows the display target's mode.
+# The game passes no graphics option, so the display sample count is SampleUtil's default,
+# none.
+#
+# Frame pacing: the main loop ends in flip(1) (0:0x8E9C); the display-queue callback
+# (0:0x2B908) runs sceDisplayWaitSetFrameBufMulti(1), sceDisplaySetFrameBuf(sync = next
+# vblank) and sceDisplayWaitSetFrameBuf, i.e. two vblanks per frame: 30 FPS. The game logic
+# runs on its own thread, lock-stepped with the render loop through event flags (one tick
+# per displayed frame, no timestep), so game speed is tied to the frame rate and no @FPS
+# block is offered. The display is already 960x544, and the display surfaces are built by
+# generic SampleUtil code that aligns a linear stride to 8 pixels (720 and 480 would give a
+# display pitch that is not a multiple of 64), so no @FB block is offered either.
+#
+# Offsets are for module NID 0x03243717 (ux0:/patch/PCSE01006/eboot.bin, the updated eboot).
+
+[PCSE01006, eboot.bin, 0x03243717]
+@MSAA
+# GraphicsContext::initialize (0:0x29CD6), no graphics option given: movs r0, #0 is the
+# default display sample count stored at [sp+92] and passed (0:0x29D92) to the display
+# builder -> movs r0, #msaa. The builder clamps it to a SceGxmMultisampleMode (0:0x28C74,
+# identity for 0/1/2) and hands it to all three render targets (multisample mode, colour
+# surface scale mode = MSAA downscale, fragment program variant) and to the depth buffer
+# (2x: 960x1088 samples, 4x: 1920x1088). r0 is dead after the store.
+0:0x29D00 t1_mov(0, msaa)
+# depth-stencil builder (0:0x1C9CA): at 4x the sample width r6 is already doubled
+# (0:0x1CA4E / 0:0x1CAF6) and the buffer is allocated 1920x1088, but lsls r3, r3, #1 doubles
+# it again for strideInSamples (3840). At 4x -> nop, so the stride is 1920 and matches the
+# allocation; the instruction is only reached at 4x (cmp r9, #2 / bne at 0:0x1CA6E), and
+# none/2x keep the stock bytes.
+0:0x1CA74 uint16(0x005B + ((msaa / 2) * (0xBF00 - 0x005B)))
+# graphics memory init (0:0x2CD2A) creates SampleUtil's three graphics heaps (1 MiB LPDDR,
+# 32 MiB CDRAM, 1 MiB CDRAM): movs.w r2, #0x2000000 is the size of the first block of the
+# 32 MiB CDRAM heap, whose first allocations are the display colour and depth buffers. The
+# larger depth buffer (+2,088,960 bytes at 2x, +6,266,880 at 4x) is added to it rounded up
+# to the heap's 1 MiB granularity (+2 MiB / +6 MiB), so the space left in it for the game's
+# other allocations is the stock amount. The heap still grows by itself beyond that, as it
+# does stock.
+0:0x2CD86 t2_mov(1, 2, 0x2000000 + (msaa * (msaa + 1) * 0x100000))

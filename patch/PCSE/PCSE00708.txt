@@ -1,0 +1,150 @@
+# Corpse Party: Blood Drive [US]
+#
+# Unity 4.3.7p4 player (UnityPlayer_437_Release) with the game's C# AOT-compiled into the
+# same module (Assembly-CSharp images: Scene.BonusMenu.BinauralVoice, NameTagListMenu/Student,
+# EndingListScreen/Chapter, tk2d, UniLua; trophy set NPWR09002). The player code is ARM (A32),
+# not Thumb: every line below is an ARM encoding.
+#
+# Rendering: GfxDevicePSP2 draws the scene straight into three 960x544 linear display buffers
+# (stride 960) with 2x multisampling (QualitySettings antiAliasing = 2 -> MSAA_DOWNSCALE colour
+# surfaces, 2x render targets, one shared tiled DF32M_S8 depth/stencil surface of 960x1088
+# samples: 32-bit float depth plus a separately allocated 8-bit stencil block); there is no
+# off-screen scene target, so @FB is also the render resolution and @IB does not apply.
+# Surface memory comes from the 104 MB "GRAPHICS - video heap" through the generic surface
+# allocator 0x1EC5C, which sizes every block from the requested width/height (rounded up to
+# powers of two: 4 MB per 960x544 colour buffer, 8 MB for the 2x depth surface) plus, for the
+# depth surface, a stencil block of align32(sample width) x align32(sample height) bytes
+# (0x1F0BC: 1 MB at 2x 960x544).
+# Pacing: the sceGxmDisplayQueueAddEntry callback (0x17DA4) calls
+# sceDisplayWaitSetFrameBufMulti(2) when QualitySettings vSyncCount is 2 (the game's setting),
+# then sceDisplaySetFrameBuf(NEXTFRAME) and sceDisplayWaitSetFrameBuf: 30 FPS. Application.
+# targetFrameRate is stored but never enforced by this player; Time.deltaTime is taken from the
+# real-time clock (TimeManager 0xA9D20) unless a script sets Time.captureFramerate.
+#
+# @FB   every back-buffer size, Screen.width/height (the display size handed to
+#       sceDisplaySetFrameBuf), the viewports set on the back buffer, the common-dialog render
+#       target and the movie player's full-screen rect. For widths that are not a multiple of
+#       64 (720, 480) the back buffers get a 768 / 512 pixel stride (display pitch) through a
+#       branch into an unreferenced function used as a code cave; 960 and 640 need no cave.
+#       Each back buffer's texture view (sceGxmTextureInitLinear at 0x1C6DC, which takes no
+#       stride) keeps the implied stride align(width, 8) = 720 / 480. The engine's own copies
+#       and readbacks (0x15510, 0x1601C / 0x160A0) use the surface stride and no path that
+#       samples a back buffer through that view is known; a sheared full-screen effect at
+#       720x408 / 480x272 would point here.
+# @MSAA none / 2x / 4x for the back buffers and every fragment program. 4x is only applied
+#       when fb_h <= 512 (720x408, 640x368, 480x272), where the depth surface stays at 8 MB or
+#       less, the stencil block grows by at most 150 KB and the colour buffers shrink by 6 MB or
+#       more. At 960x544 4x would need a 16 MB depth surface and a 2 MB stencil block, about
+#       9 MB of video heap beyond the game's own use, which cannot be established, so 4x falls
+#       back to 2x there (also when @FB is off).
+# @FPS is not provided. The pacing itself is one line (0:0x17DE4, mov r0, #2 -> vblank, the
+#       count passed to sceDisplayWaitSetFrameBufMulti) and the engine's clock is real-time,
+#       but the game logic is the Assembly-CSharp AOT code, which reaches Time.deltaTime /
+#       Time.frameCount only through PLT slots bound at run time, plus UniLua event scripts
+#       that are not in the eboot. Whether text, fades, waits and events count frames cannot be
+#       settled from the code; if any do, they would run twice as fast at 60 FPS and at 2/3
+#       speed at 20 FPS.
+#
+# Offsets are for module NID 0x959B4DC9 (eboot.bin).
+
+[PCSE00708, eboot.bin, 0x959B4DC9]
+@FB
+# GfxDevicePSP2 init (0xDA5C), back-buffer loop at 0xE258: CreateRenderColorSurface(tex, 960, 544,
+# samples, ...) (vtable+0x150) x3. The colour surface, its render target (looked up by surface size
+# in the cache at 0x21038) and its memory block all follow these two arguments; so does its texture
+# view's width/height, whose implied stride stays align(width, 8) (see the display pitch below)
+0:0xE284 a1_mov(0, 2, fb_w)    # mov r2, #960 -> back-buffer width
+0:0xE28C a1_mov(0, 3, fb_h)    # mov r3, #544 -> back-buffer height
+# init: the shared depth/stencil surface, CreateRenderDepthSurface(tex, 960, 544, ...) (vtable+0x154)
+0:0xE2D8 a1_mov(0, 2, fb_w)    # mov r2, #960
+0:0xE2E0 a1_mov(0, 3, fb_h)    # mov r3, #544
+# init: ScreenManager->SetResolutionImmediate(960, 544, 1) (vtable+4): Screen.width/height, which the
+# flip callback passes to sceDisplaySetFrameBuf as the display size and the pixel matrix uses
+0:0xE344 a1_mov(0, 1, fb_w)    # mov r1, #960
+0:0xE33C a1_mov(0, 2, fb_h)    # mov r2, #544
+# init: screen memory statistics (0x81081C14): back-buffer width/height
+0:0xE3D0 a1_mov(0, 1, fb_w)    # mov r1, #960
+0:0xE3D4 a1_mov(0, 2, fb_h)    # mov r2, #544
+# QualitySettings re-apply (vtable+0x1B8, 0x14C08): on an antiAliasing change the back buffers are
+# released and created again, colour x3 and depth, with the same hard-coded size
+0:0x14DA0 a1_mov(0, 2, fb_w)   # mov r2, #960 -> colour width
+0:0x14DA8 a1_mov(0, 3, fb_h)   # mov r3, #544 -> colour height
+0:0x14DF0 a1_mov(0, 2, fb_w)   # mov r2, #960 -> depth width
+0:0x14DF8 a1_mov(0, 3, fb_h)   # mov r3, #544 -> depth height
+# SetRenderTargets (vtable+0x2E0, 0x143A0): target size when the target is a back buffer (surface
+# byte +21 set), passed to SetViewport (vtable+0x94) after sceGxmBeginScene
+0:0x14448 a1_mov(0, 1, fb_w)   # mov r1, #960 -> [sp+40]
+0:0x14450 a1_mov(0, 1, fb_h)   # mov r1, #544 -> [sp+44]
+# begin a scene on the current back buffer when none is open: SetViewport(0, 0, 960, 544) right after
+# sceGxmBeginScene. 0x178E8 (its address is taken at 0x22CFC) runs before a draw; 0x146F8 has no
+# caller or address reference anywhere in the module and is patched only for consistency
+0:0x147F0 a1_mov(0, 3, fb_w)   # mov r3, #960 -> width
+0:0x147D8 a1_mov(0, 3, fb_h)   # mov r3, #544 -> height ([sp])
+0:0x17A54 a1_mov(0, 3, fb_w)   # mov r3, #960 -> width
+0:0x17A30 a1_mov(0, 3, fb_h)   # mov r3, #544 -> height ([sp])
+# present (vtable+0x1C0, 0xADD8): r8/r6 are the width/height of the SceCommonDialogUpdateParam render
+# target (with the surface's own stride) and of the sceGxmDisplayQueueAddEntry callback data, which
+# the flip callback compares with Screen.width/height
+0:0xAEC4 a1_mov(0, 8, fb_w)    # mov r8, #960
+0:0xAECC a1_mov(0, 6, fb_h)    # mov r6, #544
+# ScreenManager::GetResolutions (vtable+8, 0x1F11FC) lists 480x272, 640x368, 720x408 and 960x544 and
+# SetResolutionImmediate snaps any request (Screen.SetResolution from a script, the init call above)
+# to the closest entry. With a framebuffer other than 960x544 every entry becomes fb_w x fb_h, so no
+# request can move Screen.width/height away from the back-buffer size; at 960x544 the list is stock
+0:0x1F16F8 a1_mov(0, 0, fb_w)                                                                   # mov r0, #960
+0:0x1F1700 a1_mov(0, 0, fb_h)                                                                   # mov r0, #544
+0:0x1F14A4 a1_mov(0, 0, 720 + min(abs(fb_w - 960) + abs(fb_h - 544), 1) * (fb_w - 720))        # mov r0, #720
+0:0x1F14AC a1_mov(0, 0, 408 + min(abs(fb_w - 960) + abs(fb_h - 544), 1) * (fb_h - 408))        # mov r0, #408
+0:0x1F1B18 a1_mov(0, 0, 640 + min(abs(fb_w - 960) + abs(fb_h - 544), 1) * (fb_w - 640))        # mov r0, #640
+0:0x1F1B20 a1_mov(0, 0, 368 + min(abs(fb_w - 960) + abs(fb_h - 544), 1) * (fb_h - 368))        # mov r0, #368
+0:0x1F124C a1_mov(0, 1, 480 + min(abs(fb_w - 960) + abs(fb_h - 544), 1) * (fb_w - 480))        # mov r1, #480
+0:0x1F1254 a1_mov(0, 1, 272 + min(abs(fb_w - 960) + abs(fb_h - 544), 1) * (fb_h - 272))        # mov r1, #272
+# movie player full-screen draw (0x3F9A4C): Rect(0, 0, 960.0, 544.0) drawn after the pixel matrix
+# 0x81226818 set an ortho of the window rect (= Screen size): movt r0, #hi16(960.0 / 544.0) ->
+# hi16(float(fb_w / fb_h)) (v >= 512: 0x4400 + ((v - 512) >> 2), else 0x4380 + ((v - 256) >> 1))
+0:0x3F9A5C uint32(0xE3400000 | ((((fb_w >> 9) * (0x4400 + ((fb_w - 512) >> 2))) + ((1 - (fb_w >> 9)) * (0x4380 + ((fb_w - 256) >> 1)))) >> 12 << 16) | ((((fb_w >> 9) * (0x4400 + ((fb_w - 512) >> 2))) + ((1 - (fb_w >> 9)) * (0x4380 + ((fb_w - 256) >> 1)))) & 0xFFF))
+0:0x3F9A68 uint32(0xE3400000 | ((((fb_h >> 9) * (0x4400 + ((fb_h - 512) >> 2))) + ((1 - (fb_h >> 9)) * (0x4380 + ((fb_h - 256) >> 1)))) >> 12 << 16) | ((((fb_h >> 9) * (0x4400 + ((fb_h - 512) >> 2))) + ((1 - (fb_h >> 9)) * (0x4380 + ((fb_h - 256) >> 1)))) & 0xFFF))
+# Display pitch for fb_w not a multiple of 64. The surface allocator (0x1EC5C) gives a linear colour
+# surface a stride of align(width, 8) pixels (0x1F154: ldr r1, [sp, #8] / add r1, r1, #7 /
+# bic r1, r1, #7 / mul r0, r1, r0 = stride bytes); the flip callback hands that stride to
+# sceDisplaySetFrameBuf as the pitch, which must be a multiple of 64 (720 -> 768, 480 -> 512).
+# Only when fb_w % 64 != 0 (f = 1; f = 0 writes the stock bytes): the add becomes a branch to
+# 0xD6B4, the start of an unused back-buffer re-creation function. No branch, call, pointer or
+# address construction reaches 0xD654..0xD7DC; the only words naming it are its own jump tables
+# (0xD668, 0xD6E8; the patched words 0xD6B4..0xD6D0 stop short of 0xD6E8) and its unwind-table
+# entries. There, r9 holds the surface flags: 0x400 = render colour surface (0x139E0), 0x200 =
+# texture (0x1F584) or a render colour surface of format 0x15 (0x13BCC), 0x100 = createFlags bit 3
+# (0x13BB8), which only the back-buffer creation passes (0xE294 init, 0x14DB0 re-apply;
+# RenderTexture::Create 0x8CE10 never sets it). A back buffer of width fb_w gets align(width, 64);
+# every other surface keeps align(width, 8). Then back to the mul at 0x1F160. r2 and the flags
+# are dead there (0x1EE70 ands / 0x1EA74 mov r2, r1 / 0x1EE88 mov r2, #7). The memory block is
+# sized from nextpow2(width) (0x1EA74), 1024 / 512, so the 768 / 512 pixel rows fit.
+# add r1, r1, #7 -> b 0xD6B4
+0:0x1F158 uint32(min(fb_w % 64, 1) * 0xEAFFB955 + (1 - min(fb_w % 64, 1)) * 0xE2811007)
+# push {...} -> and r2, r9, #0x700
+0:0xD6B4 uint32(min(fb_w % 64, 1) * 0xE2092C07 + (1 - min(fb_w % 64, 1)) * 0xE92D47F0)
+# sub sp, sp, #32 -> cmp r2, #0x500 (render colour surface + back-buffer flag, not a texture)
+0:0xD6B8 uint32(min(fb_w % 64, 1) * 0xE3520C05 + (1 - min(fb_w % 64, 1)) * 0xE24DD020)
+# mov r7, r1 -> cmpeq r1, #fb_w (imm12 = 0xF00 | fb_w / 4, i.e. (fb_w / 4) ror 30; fb_w is a multiple of 4)
+0:0xD6BC uint32(min(fb_w % 64, 1) * (0x03510F00 | (fb_w >> 2)) + (1 - min(fb_w % 64, 1)) * 0xE1A07001)
+# cmp r7, #8 -> addeq r1, r1, #56
+0:0xD6C0 uint32(min(fb_w % 64, 1) * 0x02811038 + (1 - min(fb_w % 64, 1)) * 0xE3570008)
+# mov r6, r0 -> add r1, r1, #7
+0:0xD6C4 uint32(min(fb_w % 64, 1) * 0xE2811007 + (1 - min(fb_w % 64, 1)) * 0xE1A06000)
+# ldr lr, [r6] -> bic r1, r1, #7
+0:0xD6C8 uint32(min(fb_w % 64, 1) * 0xE3C11007 + (1 - min(fb_w % 64, 1)) * 0xE596E000)
+# mov r9, #0 -> biceq r1, r1, #56 (with the addeq: (w + 63) & ~63 for the back buffers)
+0:0xD6CC uint32(min(fb_w % 64, 1) * 0x03C11038 + (1 - min(fb_w % 64, 1)) * 0xE3A09000)
+# mov r8, r9 -> b 0x1F160 (mul r0, r1, r0)
+0:0xD6D0 uint32(min(fb_w % 64, 1) * 0xEA0046A2 + (1 - min(fb_w % 64, 1)) * 0xE1A08009)
+@MSAA
+# e = effective mode = min(msaa, 1 + min(512 / fb_h, 1)): 4x only when fb_h <= 512, else 2x.
+# GfxDevicePSP2 init: ldr r0, [r1, #64] loads QualitySettings antiAliasing (current level +0x40)
+# into [sp+0xAC]. It is the sample count of the three colour surfaces, the depth surface and their
+# render targets (CreateRender*Surface samples argument) and, mapped 2 -> 1 / 4 -> 2 at 0xE208, the
+# device multisample mode [dev+0x43CC] that 0xC5B0 and 0x12498 create every fragment program with.
+# -> mov r0, #(2 * e); at 2x (e = 1) the stock load stays
+0:0xDB08 uint32(min(abs(min(msaa, 1 + min(512 / fb_h, 1)) - 1), 1) * (0xE3A00000 + 2 * min(msaa, 1 + min(512 / fb_h, 1))) + (1 - min(abs(min(msaa, 1 + min(512 / fb_h, 1)) - 1), 1)) * 0xE5910040)
+# QualitySettings re-apply 0x14C08: ldr sl, [sl, #64] -> mov sl, #(2 * e), so a quality-level change
+# neither recreates the back buffers with the game's value nor leaves programs and targets apart
+0:0x14C44 uint32(min(abs(min(msaa, 1 + min(512 / fb_h, 1)) - 1), 1) * (0xE3A0A000 + 2 * min(msaa, 1 + min(512 / fb_h, 1))) + (1 - min(abs(min(msaa, 1 + min(512 / fb_h, 1)) - 1), 1)) * 0xE59AA040)

@@ -1,0 +1,55 @@
+# Danganronpa V3: Killing Harmony [US]
+#
+# Spike Chunsoft in-house engine (module Dangan3Vita, eboot of the installed
+# update). The game's main (0x2FB31A) fills the platform config with a
+# display-mode index and a render-mode index, both 1. The GXM device init
+# (0x531802) looks the display index up in a table it builds on the stack from
+# immediates ({960,544} {720,408} {640,368} {480,272} for indices 1..4) and the
+# render index up in a 15-entry size table copied from the data segment
+# (0x81824478; entry 0 is a custom-size slot the init fills from the config,
+# entries 1..14 at 0x81824480 are 960x544, 832x544 ... 704x384, 720x408,
+# 640x368, 480x272), and stores the results as the display size
+# (dev+0x14/+0x18) and the render size (dev+0x1C/+0x20). Everything else is
+# built from those two sizes:
+#   display: the 3 colour buffers (pitch aligned to 1024 bytes: 1024 px at
+#     960 wide, 768 px at 720/640, 512 px at 480), the display depth buffer,
+#     the half-size targets (0x2FEC58, 0x2FECFA), sceDisplaySetFrameBuf (width,
+#     height and pitch read back from the buffer object in the flip callback
+#     0x531EA0), sceCommonDialogUpdate (0x2EBE1A), the full-screen viewport and
+#     screen-size shader constants (0x4EB11A) and the game's 1920x1088-canvas
+#     to pixel scale (0x2F9EA2, 0x311002).
+#   render: the scene colour target (0x531BC6), which is bound every frame
+#     together with the DISPLAY depth buffer (0x2EC4A4), and the post-process
+#     chain (0x51E904, table 0x816B81E8: 7 targets at full size, 2 at 1/2, 3 at
+#     1/4, 1 at 1/8, 1 at 1/16, then 1/64 and 1/4; plus a fixed 1024x1024).
+# The 3D scene is drawn into the render target and composited onto the display
+# buffer, where the 2D/ADV layers are drawn directly. Stock: display 960x544,
+# render 960x544 (the scene is NOT below 960x544 in this build). Because the
+# scene target is drawn with the display depth buffer it must never be larger
+# than the display, so @FB sets both sizes together and there is no @IB.
+# Frame pacing: every frame the engine sleeps (DelayThread 900 us) until
+# vcount x 16.67 ms minus 3 ms have passed since the last flip, then queues the
+# flip; the flip callback calls sceDisplaySetFrameBuf (sync 1) and
+# sceDisplayWaitSetFrameBufMultiCB(vcount). vcount (app+0x880) is 1 or 2 and
+# is switched by the game per mode (0x2F89F8 -> 30 FPS, 0x2F8A0C -> 60 FPS).
+# The game ticks once per rendered frame (0x2FB4DA) and nothing but the pacing,
+# the flip and the frame/vblank counters reads vcount, so the frame rate is
+# left alone. No render target is multisampled (the surface helper 0x4DD35C
+# creates every render target with multisampleMode 0).
+# Offsets are for module NID 0xB030FBE9.
+
+[PCSE01100, eboot.bin, 0xB030FBE9]
+@FB
+# GXM device init 0x531802: display-mode table entry 1 on the stack (index 1 is
+# chosen by main), copied to dev+0x14/+0x18 at 0x5318F6/0x5318FC. The plugin
+# only offers FB sizes up to 960x544 (the stock size), so min() is only a guard.
+# All four sizes are exact Thumb immediates, so these two lines and the table
+# words below always hold the same size.
+0:0x53187A t2_mov(1, 3, min(fb_w, 960))    # movs.w r3, #960 -> display width
+0:0x531892 t2_mov(1, 14, min(fb_h, 544))   # movs.w lr, #544 -> display height
+# Render-size table entry 1 (0x81824480, constant data): its only reader is the
+# 120-byte memcpy at 0x5318DA in the same init, before dev+0x1C/+0x20 are set
+# at 0x53190C/0x531912. Kept equal to the display size, as in the stock game,
+# so the scene target always fits the display depth buffer it is drawn with.
+1:0x24020 uint32(min(fb_w, 960))           # .word 960 -> render width
+1:0x24024 uint32(min(fb_h, 544))           # .word 544 -> render height

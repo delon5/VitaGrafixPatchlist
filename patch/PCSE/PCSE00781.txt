@@ -1,0 +1,70 @@
+# Zero Escape: Zero Time Dilemma [US]
+#
+# In-house engine shared by the 3DS and Vita versions (ratonga script runtime with the
+# ratongalib g2d/g3d classes, Bullet physics, SCREAM/SndStream audio, .rtz data). The update
+# eboot (module vita_game). Offsets are for module NID 0xA80A9ECE only.
+#
+# How it renders: the 3D scene is NOT drawn into the display buffers. It is drawn into an
+# off-screen scene target whose size and sample mode come from one of four scene quality
+# modes, chosen per script scene (ChangeScriptScene) and applied by fn 0x4968:
+#   mode 0  640x368 4x      mode 1  720x408 4x (set at boot, the mode seen in play)
+#   mode 2  960x544 none    mode 3  960x544 4x
+# Widths/heights are the seg1 words 0x814805E0 / 0x814805F0 (4 each), the sample modes a
+# stack table built at 0x4986 (movs r3,#2 for modes 0, 1, 3; mode 2 is 0). At 4x the samples
+# are stored unresolved (scale mode none): the three colour buffers become 2w x 2h views of
+# 1920x1088 textures, depth/stencil 2*align(w,32) x 2*align(h,32) views of 1920x1088 tiled
+# textures, and a new render target w x h is created (unless bit 0x400 of the render settings
+# word 0x8149795C is set: then the views stay w x h and the colour surface uses the MSAA
+# downscale). Viewport/clip, the depth surface stride and every texture size are read back
+# from those objects at run time. Most fragment programs exist as a 4x and a none variant,
+# picked from the target's sample mode; the exception is the bloom/DOF composite
+# (PostprocessCompositeAll/Bloom/DOF, created by fn 0x102E94 as 4x only and drawn into the
+# scene target, fn 0xF1322, when the camera enables bloom or DOF). A full-screen NDC quad then
+# samples the scene texture onto the 960x544 display (three buffers, pitch 1024), where the
+# 2D layer is drawn.
+#
+# Frame pacing: display queue (2 pending) whose callback does sceDisplaySetFrameBuf(next
+# vblank) + sceDisplayWaitVblankStart. The main loop then picks a vcount from the scene's
+# script target FPS (ChangeScriptScene; gameplay scenes flip at 30, some scene asks for more)
+# capped by the CPU time of the frame (>=97% of a vblank -> 30, >=197% -> 20, >=297% -> 15):
+# 4/3/2 for <=15/<=20/<=30, 1 above 30, and calls sceDisplayWaitVblankStartMultiCB(vcount)
+# only while frames reach the display within a vblank. Game time is dt-based (the measured
+# frame time as dt*60*speed in animation, eases and script waits; Bullet steps it in 1/60 s
+# substeps).
+
+[PCSE00781, eboot.bin, 0xA80A9ECE]
+@IB
+# scene quality-mode size table (seg1 .data, read only by fn 0x4968 at 0x49A8/0x49B0, no
+# writer): IB entry n -> mode n (stock list 640x368,720x408,960x544,960x544; one IB value sets
+# all four, four values keep a size per mode). Capped at 960x544, the size of the scene
+# colour/depth/stencil allocations at 4x.
+1:0xA0 uint32(min(ib_wi(0), 960)) . uint32(min(ib_wi(1), 960)) . uint32(min(ib_wi(2), 960)) . uint32(min(ib_wi(3), 960))
+1:0xB0 uint32(min(ib_hi(0), 544)) . uint32(min(ib_hi(1), 544)) . uint32(min(ib_hi(2), 544)) . uint32(min(ib_hi(3), 544))
+
+@FPS
+# 30 is the game's own pacing and writes the stock bytes, so scenes whose script asks for more
+# than 30 still run at 60 there. The SetFrameBuf wait hook is not used: the display queue
+# callback already waits a vblank after sceDisplaySetFrameBuf, and the hook's two vblanks plus
+# that wait would hold every flip for three (20 FPS).
+# main loop vcount chooser: ldrh r3, [r4, #48] (the scene's script target FPS) -> movs r3, #60
+# at 60, which takes the engine's own >30 path (vcount 1, still 2/3/4 when the frame's CPU time
+# is over one/two/three vblanks). Stock at 30 and 20. Flags of movs are dead (cmp r1, r2 follows)
+0:0x2B5A uint16((0x8E23 * (1 - (fps_limit / 60))) + (0x233C * (fps_limit / 60)))
+# display queue callback, after sceDisplaySetFrameBuf: cmp r0, #0 / beq.n 0x2E2E ->
+# movs r0, #3 / b.n 0x2E2E at 20 (the failure branch only asserts), stock at 60 and 30
+0:0x2E00 uint16((0x2800 * (1 - (vblank / 3))) + (0x2003 * (vblank / 3))) . uint16((0xD014 * (1 - (vblank / 3))) + (0xE014 * (vblank / 3)))
+# blx sceDisplayWaitVblankStart -> blx sceDisplayWaitVblankStartMultiCB (stub 0x3312FC) at 20:
+# every flip stays on screen for 3 vblanks, so the queue holds the game at 20 FPS
+0:0x2E2E uint16(0xF32E) . uint16((0xEA6E * (1 - (vblank / 3))) + (0xEA66 * (vblank / 3)))
+
+@MSAA
+# fn 0x4968: movs r3, #2 -> sample mode of the 4x quality modes 0, 1 and 3 (stored to the
+# stack table at 0x4988/0x4990). 0 at none: textures, render target, depth stride and program
+# variants then follow the engine's own no-MSAA path (as mode 2). The engine has no 2x path
+# (4x is hard-coded in the program variants), so 2x behaves as 4x
+0:0x4986 t1_mov(3, 2 * min(msaa, 1))
+# fn 0x102E94 (program creator): movs r4, #2 -> sample mode used when the caller's flag is set,
+# which only the bloom/DOF composite programs do (0xF20D8, 0xF226E, 0xF22FC; every other caller
+# passes 0 and gets none). 0 at none, so the composite drawn into the scene target at 0xF122A
+# matches it; the output register format is unchanged. Flags of movs are dead (blx follows)
+0:0x102ED2 t1_mov(4, 2 * min(msaa, 1))
