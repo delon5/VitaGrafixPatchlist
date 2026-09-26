@@ -1,0 +1,53 @@
+# Oreshika: Tainted Bloodlines [US]
+#
+# Alfa System engine (strings "ORESHIKA2"). The scene is drawn into 960x544
+# off-screen render textures and composited into 960x544 display buffers.
+# Frame pacing: flip() at 0xF41E loads a global "vblanks per frame" value
+# (0x81600F48, default 2 = 30 FPS) and hands it to the display-queue callback
+# 0x1726C, which calls sceDisplayWaitSetFrameBufMulti(vcount) when vcount > 1,
+# then sceDisplaySetFrameBuf(sync=1) + one sceDisplayWaitVblankStart. The game
+# logic advances by the same value. Exactly four instructions read it, and all
+# four are patched below: flip()'s own inline read (0xF428), the vcount setter's
+# old-value read (0xF466), the body of the vcount getter 0xF474 (0xF47C) and the
+# body of the frame-mode getter 0x3FAA (0x3FB2). Only the last two are getters;
+# the other two are in-line reads in flip() and in the setter. The engine rates
+# built from the value (60/vcount, step = vcount*0.5, counters += mode) then
+# stay in step with the pacing.
+#
+# Frame-counted timing is not scaled by this option. The engine's "yield one
+# frame" primitive 0xDD56 has 814 call sites, so anything written as "yield N
+# times" takes N/60 s at the 60 setting and N/20 s at the 20 setting where it
+# took N/30 s: fades, screen transitions and timed script beats can be shorter
+# at FPS=60 and longer at FPS=20 (e.g. the 30-pass fades at 0x13A696-0x13A6B0
+# and 0x13A7D8-0x13A7F2, the smoothing at 0x313646). There is no timestep
+# constant that would change this. Checked on hardware at FPS=60: the game runs
+# visibly smoother and no speed problem was noticed in play. FPS=20 was not
+# tried.
+#
+# Each line is a select on s = abs(vblank - 2) (1, 0, 1 for vblank 1, 2, 3):
+# with s = 0 it re-encodes the ORIGINAL instruction word, so FPS=30 is byte for
+# byte stock and the game's own run-time rate switching still works (set_mode(3)
+# for the 20 FPS avatar/family screens at 0x308DFA and 0x308EB4, the direct
+# vcount setter calls at 0x15E69A (1 = 60 FPS for a transition) and 0x15E838
+# (2 = back to 30), the debug-999 toggle at 0x2AD86-0x2AD98 and the other
+# set_mode(1/2/3) sites). With s = 1 the loads become mov/movs #vblank and the
+# chosen rate overrides the game's own. All byte pairs below are in file order.
+# Offsets are for module NID 0xFBC7D16F.
+
+[PCSA00155, eboot.bin, 0xFBC7D16F]
+@FPS
+# frame-mode getter 0x3FAA: ldr r0,[r0] = 0068 (word 0x81600928; the logic
+# counters advance by this many vblanks) -> movs r0,#vblank = 0v20; 30 -> 0068
+0:0x3FB2 uint16((0x6800*(1-abs(vblank-2)))+((0x2000+vblank)*abs(vblank-2)))
+# flip 0xF41E inline read: ldr.w r0,[r0,#0x258] = d0f8 5802 (the vcount the
+# display-queue callback paces on) -> mov.w r0,#vblank = 4ff0 0v00; 30 -> d0f8 5802
+0:0xF428 uint32((0x0258F8D0*(1-abs(vblank-2)))+((0x0000F04F+(vblank<<16))*abs(vblank-2)))
+# vcount setter 0xF45E old-value read: ldr.w r1,[r2,#0x258] = d2f8 5812 (returned
+# to the save/restore callers) -> mov.w r1,#vblank = 4ff0 0v01; 30 -> d2f8 5812
+0:0xF466 uint32((0x1258F8D2*(1-abs(vblank-2)))+((0x0100F04F+(vblank<<16))*abs(vblank-2)))
+# vcount getter 0xF474: ldr.w r0,[r0,#0x258] = d0f8 5802 (engine rates are
+# 60/vcount, step = vcount*0.5) -> mov.w r0,#vblank = 4ff0 0v00; 30 -> d0f8 5802
+0:0xF47C uint32((0x0258F8D0*(1-abs(vblank-2)))+((0x0000F04F+(vblank<<16))*abs(vblank-2)))
+# sceCtrlReadBufferPositive2 is called right after the flip on the main thread
+# (0xF726): at 60 FPS the blocking read must not wait for the next sample
+>sceCtrlReadBufferPositive2_peekPatched()
