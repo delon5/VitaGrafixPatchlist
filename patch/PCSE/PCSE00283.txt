@@ -1,0 +1,182 @@
+# Final Fantasy X-2 HD Remaster [US]
+#
+# Internal resolution and multisampling. The display stays at the game's own 960x544: this file has no @FB
+# block and never reads the FB setting. A display-size option cannot be added to this file: 24 constants
+# of the low-resolution rectangle depend on both the display size and the internal scale, and an offset
+# may be patched only once per file.
+#
+# PhyreEngine game (module ffx2_phyreApp.self, NID 0x0D27CBF3), same framework as FFX HD. The application
+# constructor fills the display config (960x544, sample count 4) with immediates. The scene is drawn into an
+# off-screen "ColorBuffer" texture target of that size with 4x MSAA and composited onto the display. In the
+# scenes where the game sets its low-resolution flag (obj+0x142d) it renders only a 0.75-scaled
+# sub-rectangle of that target, 720x408, and samples it back with a (0.75, 0.75) UvScaleBias. Frames are
+# paced at 30 FPS.
+#
+# @IB sets that scale to S = K / 32, K = min(max(32 * ib_w / 960, 16), 32) truncated (the float immediates
+# only encode multiples of 1/32). Only the IB width is read; the rendered height is 544 * K / 32. The OSD
+# shows the value you selected, not the rounded one.
+#   IB 960x544 -> K = 32 -> 960x544 (full resolution)
+#   IB 720x408 -> K = 24 -> 720x408 (the game's own setting, nothing visible changes)
+#   IB 640x368 -> K = 21 -> 630x357
+#   IB 480x272 -> K = 16 -> 480x272 (half; narrower settings also give 480x272)
+# With IB switched off the @IB block is skipped and the game is untouched.
+# @MSAA sets the sample count of the display target and of the scene target: none, 2x or 4x (4x is the
+# game's own). The engine derives every colour surface, depth surface and fragment-program mode from them.
+# 2x is a mode the shipped game never uses; its depth layout is corrected here (see the @MSAA block).
+#
+# Known limits:
+# - IB changes only the low-resolution scenes. Scenes the game already draws at 960x544 (flag clear) keep
+#   their full resolution at every IB setting.
+# - Some passes split the rectangle into two halves on the 32 px tile grid. The game's constants
+#   (720 -> 352, 408 -> 192) are read as half the rectangle rounded down to 32 px. The other rule that fits
+#   them, 32 * ceil((W - 32) / 64), differs by one tile when W mod 64 > 32 (e.g. W = 630).
+# - The vertical split pass cannot put its split lower than y = 224 (16-bit immediate), so at IB widths of
+#   930 and more its halves are 224 / 303 or 224 / 320 instead of centred. They still cover the rectangle.
+# - The map 56 split pass leaves the last W mod 64 pixels of the rectangle in neither half, as the game
+#   does natively (16 px); that is 32 px at IB 480x272, 54 px at IB 640x368 and at most 62 px (IB 510..539).
+# - Above IB 720 wide the "BrokenScreenEffect" capture texture grows with S, up to 960x544 (+0.87 MiB).
+#   The engine takes it from its GPU heaps when the effect first binds it. Whether they always have room
+#   is not established; if they do not, the bind returns out-of-memory.
+# Played on hardware at IB 960x544 with MSAA 4x without problems (before the wipe pass of maps 297..305
+# was corrected to keep its strip count; that pass was not checked).
+# At IB 720x408 with MSAA 4x, 27 of the 54 patched sites differ from the game's bytes: 20 produce the same
+# values with other instructions, 2 are the wipe terminator (391 instead of 384; the same strips are
+# drawn), and 5 are 2x-only lines that 4x never executes.
+
+[PCSE00283, ffx2_phyreApp.self, 0x0D27CBF3]
+@IB
+# --- tile-aligned halves of the low-resolution rectangle. Its size is W = 960 * K / 32 by H = 544 * K / 32;
+# X = 32 * floor(W / 64) and Y = 32 * min(floor(H / 64), 7). At K = 24 these are the game's own 720 / 352 /
+# 368 (= W - X) and 408 / 192 / 216 (= H - Y) ---
+# field / battle split pass 0xC7A7E (flag-guarded at 0xC7AA4 / 0xC7B10):
+# movs.w r3, #352 -> movw r3, #X (left half width), movs.w r1, #352 -> movw r1, #X (right half x),
+# movs.w r3, #368 -> movw r3, #(W - X) (right half width)
+0:0xC7AB8 t3_mov(3, 960*min(max(32*ib_w/960,16),32)/2048*32)
+0:0xC7ACA t3_mov(3, 960*min(max(32*ib_w/960,16),32)/2048*32)
+0:0xC7B22 t3_mov(1, 960*min(max(32*ib_w/960,16),32)/2048*32)
+0:0xC7B26 t3_mov(3, 960*min(max(32*ib_w/960,16),32)/32-960*min(max(32*ib_w/960,16),32)/2048*32)
+0:0xC7B36 t3_mov(1, 960*min(max(32*ib_w/960,16),32)/2048*32)
+0:0xC7B3A t3_mov(3, 960*min(max(32*ib_w/960,16),32)/32-960*min(max(32*ib_w/960,16),32)/2048*32)
+# maps 297..305 strip pass 0xC6E74, LEFT rect: movs.w r8, #352 -> movw r8, #X
+# (the two emitters at 0xC7178 / 0xC7194 use r8 - 32 * strips as the width)
+0:0xC716A t3_mov(8, 960*min(max(32*ib_w/960,16),32)/2048*32)
+# same pass, WIPE TERMINATOR: adds.w r0, r0, #384 -> addw r0, r0, #C (T4 ADD, also 4 bytes, no flags -
+# nothing reads them before vdup.32 d0, r0 at 0xC76CA and the cbz at 0xC76D6). 32 * strips + C is compared
+# against ctx.w = W at 0xC76CE, so the wipe ends on strip ceil((W - C) / 32); C = ceil(W / 2) + 31 lies in
+# [W - X, W - X + 31] for every W, which makes that strip exactly X / 32, i.e. the left width X - 32*strips
+# (0xC7170 / 0xC718E) and the right x (0xC74E8) stop at exactly 0 as they do natively. At the native W = 720
+# that is 391 rather than the game's 384; both are in the same 32 px window, so the wipe ends on the same
+# strip 11 and draws the same strips. W - X + 16 would emit 384 exactly but needs the K expression twice,
+# which does not fit in 127 characters. With the original 384 kept at a smaller W the counter would overrun
+# X, the left width would go negative and the emitter 0x2668E would take its cmp.w r4, #0x8000 / bhi assert
+# path (movs r0, #0 ; str r0, [r0, #0] at 0x266E8). Two lines: imm8 at 0xC76C8, imm3 high nibble at 0xC76C9
+0:0xC76C6 00F2 r . uint8((960*min(max(32*ib_w/960,16),32)/32+63)/2%256)
+0:0xC76C9 uint8((960*min(max(32*ib_w/960,16),32)/32+63)/2/256*16)
+# same pass, shader strip width (vdup.32 d3, r0 at 0xC7366): mov.w r0, fp, lsl #5 -> movw r0, #(W - X) and
+# adds.w r0, r0, #368 -> add.w r0, r0, fp, lsl #5, i.e. the same r0 = 32 * strips + (W - X) in the same
+# 8 bytes. The two lines only work together. ADD.W sets no flags; nothing reads them before the cmp at 0xC74C6
+0:0xC734A t3_mov(0, 960*min(max(32*ib_w/960,16),32)/32-960*min(max(32*ib_w/960,16),32)/2048*32)
+0:0xC7352 00EB4B10 r
+# same pass, RIGHT rect for the viewport emitter at 0xC74F6: rsbs r1, r3, #352 / movs.w fp, #352 (dead) /
+# adds.w r3, r3, #368 -> movw r1, #X ; subs r1, r1, r3 ; movw r3, #W ; subs r3, r3, r1
+# (r3 = 32 * strips on entry, so r1 = X - 32 * strips and r3 = W - X + 32 * strips; fp has no reader)
+0:0xC74E8 t3_mov(1, 960*min(max(32*ib_w/960,16),32)/2048*32) . C91A r
+0:0xC74EE t3_mov(3, 960*min(max(32*ib_w/960,16),32)/32) . 5B1A r
+# same pass, RIGHT rect for the region-clip emitter at 0xC7516: rsbs r1, r3, #352 / adds.w r3, r3, #368 ->
+# ldr r1, [r0, #8] ; ldr r3, [r0, #16] ; nop ; nop. This reloads the x / w that the viewport call above
+# stored in the command context (r0 = ctx again from 0xC74FA; stores at 0x2671E / 0x26722), so the clip
+# always equals the viewport. The stores are skipped only if that call's command allocation fails
+# (0x266FA / 0x266FE); the fields would then still hold the previous rect, and the region-clip emitter asks
+# the same allocator right after (0x26746). Flags: nothing reads them before the callee's own adds
+0:0xC750E 81680369 r . nop *2
+# map 56 split pass 0xC7BB8 (x of the left rect is the ctx x): movs.w r3, #352 -> movw r3, #X (left width),
+# movs.w r1, #352 -> movw r1, #X (right half x), movs.w r3, #352 -> movw r3, #X (right half width).
+# All four halves are X, exactly as the game has them, so at the native ratio these six lines emit the
+# game's own 352 and nothing moves. The cost is the game's own quirk: the rect's last W - 2X = W mod 64
+# pixels are in neither camera (16 px natively, 54 px at W = 630, 62 px at most). The sibling pass 0xC7A7E uses
+# W - X for its right half; mirroring that here would tile [0, W) exactly but would widen the right camera
+# by 16 px at the native setting, which is not acceptable for a size the user reads as "unchanged"
+0:0xC7C4A t3_mov(3, 960*min(max(32*ib_w/960,16),32)/2048*32)
+0:0xC7C5C t3_mov(3, 960*min(max(32*ib_w/960,16),32)/2048*32)
+0:0xC7CC6 t3_mov(1, 960*min(max(32*ib_w/960,16),32)/2048*32)
+0:0xC7CCA t3_mov(3, 960*min(max(32*ib_w/960,16),32)/2048*32)
+0:0xC7CDA t3_mov(1, 960*min(max(32*ib_w/960,16),32)/2048*32)
+0:0xC7CDE t3_mov(3, 960*min(max(32*ib_w/960,16),32)/2048*32)
+# vertical split pass (flag-guarded at 0xC909C / 0xC92D4): movs.w fp, #192 -> movw fp, #Y (upper half
+# height), movs r2, #192 -> movs r2, #Y (lower half y), and movs.w fp, #216 -> sub.w fp, r7, #Y: r7 is the
+# bound rect height, loaded once at 0xC8FDC (ldr r7, [r0, #20]) and never written again before 0xC92E8, so
+# the lower half height is H - Y exactly; SUB.W sets no flags and the original MOVS.W's are read by nothing.
+# The 16-bit movs r2 cannot hold 256, hence the cap Y <= 224, which binds at K >= 31 (H = 527 and 544)
+0:0xC90B0 t3_mov(11, min(544*min(max(32*ib_w/960,16),32)/2048,7)*32)
+0:0xC92E8 A7F1 r . uint8(min(544*min(max(32*ib_w/960,16),32)/2048,7)*32) . 0B r
+0:0xC92F4 t1_mov(2, min(544*min(max(32*ib_w/960,16),32)/2048,7)*32)
+0:0xC9306 t1_mov(2, min(544*min(max(32*ib_w/960,16),32)/2048,7)*32)
+# --- boost cap. The two boost passes write 1.32 to the scale multiplier at obj+0x1430 (movw/movt r1), and
+# the emitted low-resolution rect is target * S * multiplier. -> min(1.32, 1 / S), so that the boosted rect
+# still fits the target: trunc(960 * S * boost) <= 960 and trunc(544 * S * boost) <= 544. At K = 24 this is
+# the game's own 1.32 (0.75 * 1.32 = 0.99); at K = 32 it is 1.0 ---
+0:0xC2FB8 mov32(1, 0x3F800000 + int(round((min(1.32, 32.0/min(max(32*ib_w/960,16),32)) - 1.0)*8388608.0)), 0)
+0:0xD24D4 mov32(1, 0x3F800000 + int(round((min(1.32, 32.0/min(max(32*ib_w/960,16),32)) - 1.0)*8388608.0)), 0)
+# --- internal scale S = K / 32. At K = 24 every line below writes its own original bytes ---
+# the low-res viewport / region clip scale of five pass functions: vmov.f32 s4, #0.75 -> #S
+# (the emitted rect is rect * S * boost)
+0:0xE537C t2_vmov(4, min(max(32*ib_w/960,16),32)/32.0)
+0:0xE5768 t2_vmov(4, min(max(32*ib_w/960,16),32)/32.0)
+0:0xE61BA t2_vmov(4, min(max(32*ib_w/960,16),32)/32.0)
+0:0xE6BE0 t2_vmov(4, min(max(32*ib_w/960,16),32)/32.0)
+0:0xE70B4 t2_vmov(4, min(max(32*ib_w/960,16),32)/32.0)
+# capture module init 0x1143D0: vmov.f32 s2, #0.75 -> #S. It sizes the "BrokenScreenEffect" copy texture
+# as screen * S ([r9+0xC98] / [r9+0xC9C], used by 0x4C364 at 0x114374), so the texture matches the rendered
+# rect. Above K = 24 it grows, to 960x544 at 4 bytes per texel at most (+0.87 MiB). Its storage comes from
+# the engine's GPU heaps (0x2EFA8, second heap as fallback) when the target is first bound; if both fail,
+# the creator 0x32EB0 returns 13 and the bind is abandoned (0x37A42)
+0:0x114704 t2_vmov(2, min(max(32*ib_w/960,16),32)/32.0)
+# capture module: vmov.f32 q0, #0.75 (NEON, UvScaleBias when low-res) -> #S: imm8 = 0x50 + K (0x60..0x70);
+# two lines because the K expression may appear only once in a 127-character line
+0:0x114BDA uint16(0xEF86+min(max(32*ib_w/960,16),32)/32)
+0:0x114BDC uint16(0x0F50+min(max(32*ib_w/960,16),32)%16)
+# UvScaleBias literal pools (0.75, 0.75, 0, 0) of the six low-res sampling passes -> (S, S, 0, 0)
+0:0xE5638 fl32(min(max(32*ib_w/960,16),32)/32.0)
+0:0xE563C fl32(min(max(32*ib_w/960,16),32)/32.0)
+0:0xE60A4 fl32(min(max(32*ib_w/960,16),32)/32.0)
+0:0xE60A8 fl32(min(max(32*ib_w/960,16),32)/32.0)
+0:0xE6A74 fl32(min(max(32*ib_w/960,16),32)/32.0)
+0:0xE6A78 fl32(min(max(32*ib_w/960,16),32)/32.0)
+0:0xE6F84 fl32(min(max(32*ib_w/960,16),32)/32.0)
+0:0xE6F88 fl32(min(max(32*ib_w/960,16),32)/32.0)
+0:0x1264FC fl32(min(max(32*ib_w/960,16),32)/32.0)
+0:0x126500 fl32(min(max(32*ib_w/960,16),32)/32.0)
+0:0x1281BC fl32(min(max(32*ib_w/960,16),32)/32.0)
+0:0x1281C0 fl32(min(max(32*ib_w/960,16),32)/32.0)
+@MSAA
+# The engine lays a 2x depth buffer out as if the second sample were HORIZONTAL (stride 2w samples, h rows).
+# The hardware puts it VERTICALLY: at 2x the stride stays w and the rows double; only 4x doubles the
+# stride. The byte count is the same either way, so the three 2x-only groups below TRANSPOSE the two 2x
+# depth allocations rather than enlarge them. At 4x and at none those five lines change nothing that runs.
+# app ctor: str.w r7, [r4, #684] stores the sample count (r7 = 4); source register -> r1 (= 1) / r0 (= 2) / r7 (= 4)
+0:0x9A856 uint16(0xF8C4) . uint16(0x02AC | (((0x701 >> (4 * msaa)) & 15) << 12))
+# display depth surface, 2x only. strd r4, r0, [sp, #256] (0x94336) writes [sp+0x100] = mode and
+# [sp+0x104] = 2, the stride multiplier (stride = mult << 10 at 0x94532); str r4, [sp, #264] (0x9433A) writes
+# [sp+0x108] = mode, the row multiplier (memory = h * rows * (mult << 12) at 0x9448C..0x944B2). The engine
+# therefore gives 2x stride 2048 x 544 rows. -> strd r4, r4 (stride mult = mode = 1, 1024 samples >= 960)
+# and str r0 (row mult = 2). 0x94338 is the second halfword of that strd (Rt / Rt2 / imm8: Rt2 r0 -> r4).
+# At 4x r4 = r0 = 2, so both stores are unchanged, and at msaa = none cmp r3, #1 (0x94320) /
+# bls.w 0x94552 (0x94328) skips 0x9432C..0x9433A altogether
+0:0x94338 uint16(0x4440)
+0:0x9433A uint16(0x9042)
+# scene render-target setup: movs r0, #4 (type byte of the ColorBuffer colour / depth target descriptors) -> 3 / 2 / 4
+0:0xE4B0A t1_mov(0, (0x423 >> (4 * msaa)) & 15)
+0:0xE4B94 t1_mov(0, (0x423 >> (4 * msaa)) & 15)
+# scene depth surface stride, 2x only: the tbb at 0x33998 dispatches on (type byte - 2), and only type 2
+# lands on 0x339AC, where movs r1, #2 ; mov lr, r4 set the width multiplier to 2 and the height multiplier
+# to r4 = 1 (again the horizontal 2x layout). -> mov.w lr, #2 in the same 4 bytes: r1 keeps the 1 that
+# 0x33984 put there, so stride = align(w, 32) >= w and rows = 2h, consumed at 0x33A20 / 0x33A2C and passed
+# to sceGxmDepthStencilSurfaceInit at 0x33A6E. Types 3 and 4 use other tbb entries and never reach it
+0:0x339AC 4FF0020E r
+# scene depth texture, 2x only: the creator's mode-1 arm allocates 2w x h (bgt.n at 0x32FB0 -> 0x32FBA,
+# mov r4, sl ; str.w lr, [sp, #92] with lr = 2w, sl = h) - the same bytes as w x 2h but the wrong shape for
+# the stride above. -> bgt.n 0x32FB6 ; (0x32FB2 mov r4, sl kept, it is the mode-0 arm and the target of
+# bgt.n at 0x330A4) ; b.n 0x32FBA ; mov.w r4, sl, lsl #1 ; str.w r9, [sp, #92] (r9 = w) ; nop.
+# Mode 0 still gets w x h through 0x32FB2, mode 2 still branches away at 0x32FAC to the 2w x 2h arm
+0:0x32FB0 01DC r
+0:0x32FB4 01E04FEA4A04CDF85C9000BF r
