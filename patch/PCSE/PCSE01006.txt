@@ -1,10 +1,16 @@
 # Zero Escape: The Nonary Games [US]
 #
+# Two executables, two sections: the launcher and 999 (eboot.bin, first section) and
+# Virtue's Last Reward (skp2_psp2.self, second section). VitaGrafix applies the section that
+# matches the running executable. A config for PCSE01006 applies to both: 999 offers @MSAA
+# (its own setting is none), VLR offers @MSAA (its own setting is 4x) and @FPS, and an option
+# a section does not offer is ignored while that game runs.
+#
 # Spike Chunsoft "skp" engine (module skp_vita) on Sony's SampleUtil graphics layer
 # (sce::SampleUtil::Graphics, memory heaps named "SampleGraphUtil"). This eboot is the
 # launcher and 999 (Zero Escape Vol. 1). Virtue's Last Reward is a separate executable,
 # app0:skp2_psp2.self, started with sceAppMgrLoadExec (0:0x9AAE); it is a different module
-# and is NOT covered by this section.
+# with its own section at the end of this file.
 #
 # Rendering: the scene is drawn straight into the display buffers. SampleUtil's display
 # builder (0:0x2B38C) makes three 960x544 linear A8B8G8R8 colour buffers, one render target
@@ -50,3 +56,83 @@
 # other allocations is the stock amount. The heap still grows by itself beyond that, as it
 # does stock.
 0:0x2CD86 t2_mov(1, 2, 0x2000000 + (msaa * (msaa + 1) * 0x100000))
+
+# Zero Escape: Virtue's Last Reward, as shipped in Zero Escape: The Nonary Games [US]
+#
+# This section covers the Virtue's Last Reward executable, app0:skp2_psp2.self (module
+# skp2_psp2), which the launcher starts with sceAppMgrLoadExec. It is the same Chunsoft
+# "SKP2" engine as the standalone release (Irrlicht with a custom GXM driver,
+# psp2skp2driver, and Lua scripts bound through luabind), in a different build. Offsets are
+# for module NID 0x94AC53CE.
+#
+# Rendering: the whole frame (3D, 2D layers, text, menus) is drawn into an off-screen
+# 960x544 4x MSAA scene target (fn 0x2803A: render target + 4x depth + a 960x544
+# stride-960 colour surface in MSAA-downscale mode). Post-effect targets made through the
+# Irrlicht addRenderTargetTexture path (fn 0x282B8: 960x544 and a 256/128/64/32 chain) are
+# 4x as well. At the end of the frame (fn 0x29474) the scene colour is drawn as one quad
+# onto one of two 960x544 display buffers (pitch 1024, no depth, no MSAA, made in fn
+# 0x2737A), followed by the touch/debug overlay batches, and queued with
+# sceGxmDisplayQueueAddEntry.
+# Frame pacing: the display-queue callback (fn 0x27722) calls sceDisplaySetFrameBuf (next
+# frame) and then sceDisplayWaitVblankStartMulti(n), n being a global the scripts set
+# through SetVSyncWaitCount (2 = 30 FPS in normal play). The engine's timing is wall-clock
+# based: the main loop (fn 0x1F6828) measures the frame time in ms from the Irrlicht timer,
+# clamps it to 100 ms and stores it with the delta time in seconds that the scripts read
+# through System.getDeltaTime. The game logic itself is Lua script outside the executable,
+# so it is not established here that every script uses that frame time instead of
+# counting frames. Game.setFPS / getFPS only store and return a value in the game object;
+# neither the pacing above nor the frame time reads it.
+# The executable does count frames in two cosmetic places: the save-data dialog flows (fn
+# 0x246B2, fn 0x25476) present one frame per pass of their dialog loops (a fixed 80
+# passes, and waits of up to 100 and 999 passes), and the touch marker (fn 0x292BA) fades
+# by a fixed step each frame. At 60 / 20 FPS these take half / 1.5 times as long; the
+# dialog status and the save thread are still waited for. Movies (SceAvPlayer, fn 0x2C01E)
+# take a new video frame only when its timestamp has advanced, so they keep their speed.
+#
+# @FB and @IB are not provided. Every frame is drawn into the fixed 960x544 scene target
+# and the display buffers only receive the composite quad, so smaller display buffers
+# would soften the picture without saving GPU time. A smaller scene target would also need
+# the 2D layer shaders' uRenderTargetSize input, the scene viewport/clip and the 960x544
+# post-effect targets reworked, and the game already renders at the panel's native
+# 960x544, so there is nothing to raise.
+
+[PCSE01006, skp2_psp2.self, 0x94AC53CE]
+@FPS
+# display-queue callback (fn 0x27722): ldr r0,[r0] loads the vblank count the scripts set
+# with SetVSyncWaitCount before sceDisplayWaitVblankStartMulti. At 30 FPS the load is kept:
+# the count the scripts set (2 in normal play). At 60 / 20 FPS it becomes movs r0,#1 / #3.
+# The global itself is not touched, so the renderer's own count == 1 path (fn 0x29720
+# swaps the 2D layer material idx 3, with mono/blend effects and alpha test, for the plain
+# idx 7) keeps following the game's setting: at 60 FPS the effects stay and the frame
+# costs what it does at 30, so 60 is most likely to hold with @MSAA at 2x or none.
+0:0x2777C uint16((0x6800 * (1 - (vblank % 2))) + ((0x2000 + vblank) * (vblank % 2)))
+
+@MSAA
+# scene target (fn 0x2803A): movs r3,#2 -> render target multisample mode
+0:0x281F8 t1_mov(3, msaa)
+# scene target: movs r3,#2 -> depth surface mode (fn 0x26560 sizes and strides the depth
+# buffer from it: w*h, w*2h or 2w*2h samples)
+0:0x2820A t1_mov(3, msaa)
+# scene target: movs r1,#2 -> colour surface scale argument (fn 0x26440 passes
+# MSAA-downscale when it is non-zero, scale none when it is 0)
+0:0x28214 t1_mov(1, msaa)
+# off-screen render-target textures (fn 0x282B8, every post-effect target): the same three
+0:0x283A6 t1_mov(3, msaa)
+0:0x283B2 t1_mov(3, msaa)
+0:0x283BA t1_mov(1, msaa)
+# fragment programs (fn 0x26758 passes its r2 argument as the multisample mode of
+# sceGxmShaderPatcherCreateFragmentProgram) of every shader drawn into those targets:
+# movs r2,#2 -> msaa.
+# fn 0x269FA (both clear/fill shaders, used by the scene-begin fn 0x28D02 and the in-scene
+# clear fn 0x29096, which only runs while an off-screen scene is open)
+0:0x26A48 t1_mov(2, msaa)
+# fn 0x26D14 (texture copy into off-screen targets, fn 0x29120)
+0:0x26DCE t1_mov(2, msaa)
+# material shaders idx 0-2 (fn 0x27AC0), idx 4-6 (fn 0x27BEE), idx 3 (fn 0x27E18), idx 7 (fn 0x27F5A)
+0:0x27B42 t1_mov(2, msaa)
+0:0x27C94 t1_mov(2, msaa)
+0:0x27EAE t1_mov(2, msaa)
+0:0x27FF0 t1_mov(2, msaa)
+# fn 0x26F90: the composite shader, drawn only into the display target (no MSAA). The game
+# creates it 4x; at none / 2x it is created without multisampling to match that target
+0:0x2704A t1_mov(2, 2 * (msaa / 2))
